@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Glisters — New Tab",
+  "description": "Minimal keyboard-first new tab with a shortcut grid, synced to Cloudflare.",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqlpdnJ/bsyjKS5P88eGe+kMPnuHju8lfatoY+TATaApnjNvkzfqm0poBp0ST9RrjFJqGx7EzVZAbmyBEC59xSMvwzQHGPHknLGcY2Mf4fIdoRN+hBN5a+w3bBJLdr+4LHHxW1gexWTtOF0UxRVcxSf6Bwq+X4rdDReEW6JOfxV7udOrLwsucyNDZjkYM1ObNgFclPE5j86XEdSy7ccX822S/OJkcUytr5tyNQWpY8yxa6EGkK+IIW5eW73HDwkgEyA/LnhQ+pdBdmnaxIIkcY5yZvhAMeCkq+88w+5UUndjqRFQca61dO3EEd/xTsTgHY6Pe6EPDccetfL4nrj5AFwIDAQAB",
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["storage", "bookmarks"],
+  "host_permissions": [
+    "https://*/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src https: data: blob:; connect-src 'self' https:;"
+  }
+}

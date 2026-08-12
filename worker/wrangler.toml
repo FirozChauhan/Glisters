@@ -1,0 +1,10 @@
+# Cloudflare Worker that fronts the R2 bucket so no credentials ever ship in
+# the extension. Deploy with:  wrangler deploy
+name = "glisters"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# point this at the R2 bucket that holds Glisters/save.json
+[[r2_buckets]]
+binding = "SAVE"
+bucket_name = "jigar"

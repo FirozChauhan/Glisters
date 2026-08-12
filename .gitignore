@@ -1,0 +1,16 @@
+.env
+js/config.js
+node_modules/
+.freebuff/
+
+# wrangler local cache — can contain account/oauth credentials
+worker/.wrangler/
+worker/.dev.vars
+.dev.vars
+
+# OS / editor cruft
+.DS_Store
+*.log
+worker/.wrangler/
+worker/.dev.vars
+

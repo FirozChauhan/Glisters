@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glisters</title>
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://www.google.com">
+<link rel="preconnect" href="https://ssl.gstatic.com">
+<link rel="preconnect" href="https://wallhaven.cc">
+<link rel="preconnect" href="https://w.wallhaven.cc">
+<link rel="preconnect" href="https://th.wallhaven.cc">
+<link rel="preconnect" href="https://icons.duckduckgo.com">
+<!-- fonts load asynchronously (media=print swap) so first paint never waits
+     on fonts.googleapis.com — text renders in the fallback face first and
+     swaps in (display=swap) when the webfonts arrive -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&family=Aref+Ruqaa+Ink:wght@400;700&display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&family=Aref+Ruqaa+Ink:wght@400;700&display=swap"></noscript>
+<link rel="stylesheet" href="css/main.css">
+<link rel="stylesheet" href="css/bookmarks.css">
+</head>
+<body>
+
+<button id="settingsBtn" class="icon-btn settings-fab" type="button" title="settings (s)" aria-label="settings">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+</button>
+
+<main class="stage">
+  <div class="blob" aria-hidden="true" style="top:-12%;left:-8%;"></div>
+  <div class="blob" aria-hidden="true" style="bottom:-18%;right:-10%;"></div>
+  <div class="blob" aria-hidden="true" style="top:42%;left:58%;"></div>
+
+  <section class="scroll-area" id="scroll" aria-label="shortcuts">
+    <div class="grid-wrap">
+      <!-- mouse-nav: the grid starts with the focus ring hidden (assume the
+           mouse until the first keyboard nav reveals it) so the first icon
+           doesn't show a selection outline on every new tab / reload -->
+      <div class="grid mouse-nav" id="grid"></div>
+    </div>
+
+    <div class="empty animate-fade-up" id="empty" hidden>
+      <span class="empty-chip" aria-hidden="true">+</span>
+      <p class="empty-title">no shortcuts yet</p>
+      <p class="empty-sub">press <kbd>a</kbd> to add your first site</p>
+      <button type="button" class="btn-primary" id="emptyAdd">add shortcut</button>
+    </div>
+  </section>
+
+  <form class="bar" id="bar" hidden>
+    <span class="bar-prompt" aria-hidden="true">:</span>
+    <input id="barInput" type="text" placeholder="url or site name · paste image to reverse-search" autocomplete="off" spellcheck="false" aria-label="command bar">
+  </form>
+</main>
+
+<p class="page-sig" dir="rtl">فیروز خان چوہان</p>
+
+<div class="scrim" id="scrim" hidden></div>
+
+<aside class="bk" id="bk" aria-label="bookmarks" aria-hidden="true">
+  <div class="bk-head">
+    <h2 class="bk-title">bookmarks</h2>
+    <div class="bk-head-actions">
+      <button id="bkChrome" class="icon-btn bk-chrome-btn" type="button" title="fetch bookmarks from chrome (automatic)" aria-label="fetch bookmarks from chrome">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M1 14l4.64 4.36A9 9 0 0 0 20.5 15"/></svg>
+      </button>
+      <button id="bkClose" class="icon-btn" type="button" title="close (esc)" aria-label="close bookmarks">&times;</button>
+    </div>
+  </div>
+  <div class="bk-nav">
+    <button id="bkBack" class="bk-nav-btn" type="button" title="back (h)" aria-label="back">‹</button>
+    <div class="bk-crumbs" id="bkCrumbs" aria-label="current folder"></div>
+  </div>
+  <div class="bk-tree" id="bkTree" role="tree" tabindex="-1"></div>
+  <div class="bk-empty" id="bkEmpty">
+    <span class="bk-empty-title"></span>
+    <span class="bk-empty-sub"></span>
+    <button type="button" class="bk-btn bk-empty-add">add bookmark</button>
+  </div>
+</aside>
+
+<button id="bkToggle" class="icon-btn bk-fab" type="button" title="bookmarks (b)" aria-label="bookmarks (b)">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+</button>
+
+<aside class="drawer" id="drawer" aria-label="settings" aria-hidden="true">
+  <div class="drawer-head">
+    <h2 class="drawer-title">settings</h2>
+    <button id="drawerClose" class="icon-btn" type="button" title="close (esc)" aria-label="close">&times;</button>
+  </div>
+  <nav class="set-nav" id="setNav" aria-label="settings sections">
+    <button type="button" class="set-nav-btn" data-scroll="layout" aria-current="true">layout</button>
+    <button type="button" class="set-nav-btn" data-scroll="wallpapers">wallpapers</button>
+    <button type="button" class="set-nav-btn" data-scroll="sync">sync</button>
+    <button type="button" class="set-nav-btn" data-scroll="keys">keys</button>
+  </nav>
+  <div class="drawer-body" id="drawerBody">
+    <section class="set-group" id="grp-layout">
+      <h3 class="set-label">layout</h3>
+
+      <div class="set-row">
+        <label class="set-name" for="set-iconSize">Icon size</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-4" data-target="iconSize" aria-label="decrease icon size">&minus;</button>
+          <input type="range" id="set-iconSize" min="44" max="112" step="4">
+          <button type="button" class="step" data-step="4" data-target="iconSize" aria-label="increase icon size">+</button>
+          <em class="set-val" id="val-iconSize"></em>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-colGap">Column gap</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-2" data-target="colGap" aria-label="decrease column gap">&minus;</button>
+          <input type="range" id="set-colGap" min="6" max="48" step="2">
+          <button type="button" class="step" data-step="2" data-target="colGap" aria-label="increase column gap">+</button>
+          <em class="set-val" id="val-colGap"></em>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-rowGap">Row gap</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-2" data-target="rowGap" aria-label="decrease row gap">&minus;</button>
+          <input type="range" id="set-rowGap" min="6" max="40" step="2">
+          <button type="button" class="step" data-step="2" data-target="rowGap" aria-label="increase row gap">+</button>
+          <em class="set-val" id="val-rowGap"></em>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-cols">Columns</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-1" data-target="cols" aria-label="decrease columns">&minus;</button>
+          <input type="range" id="set-cols" min="1" max="12" step="1">
+          <button type="button" class="step" data-step="1" data-target="cols" aria-label="increase columns">+</button>
+          <em class="set-val" id="val-cols"></em>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-rows">Rows</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-1" data-target="rows" aria-label="decrease rows">&minus;</button>
+          <input type="range" id="set-rows" min="1" max="8" step="1">
+          <button type="button" class="step" data-step="1" data-target="rows" aria-label="increase rows">+</button>
+          <em class="set-val" id="val-rows"></em>
+        </div>
+      </div>
+
+      <div class="set-row toggle">
+        <span class="set-name">Show labels</span>
+        <label class="switch" aria-label="show labels">
+          <input type="checkbox" id="set-labels">
+          <span class="track" aria-hidden="true"></span>
+        </label>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-labelOp">Label opacity</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-5" data-target="labelOp" aria-label="decrease label opacity">&minus;</button>
+          <input type="range" id="set-labelOp" min="20" max="100" step="5" data-unit="%">
+          <button type="button" class="step" data-step="5" data-target="labelOp" aria-label="increase label opacity">+</button>
+          <em class="set-val" id="val-labelOp"></em>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-labelColor">Label color</label>
+        <div class="color-wrap">
+          <input type="color" id="set-labelColor" value="#f5f5f5" aria-label="label color">
+          <em class="set-val" id="val-labelColor"></em>
+          <button type="button" class="btn-secondary" id="labelColorReset">reset</button>
+        </div>
+      </div>
+
+      <div class="set-row toggle">
+        <span class="set-name">Monochrome icons</span>
+        <label class="switch" aria-label="monochrome icons">
+          <input type="checkbox" id="set-mono">
+          <span class="track" aria-hidden="true"></span>
+        </label>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-bkWidth">Sidebar width</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-8" data-target="bkWidth" aria-label="decrease sidebar width">&minus;</button>
+          <input type="range" id="set-bkWidth" min="280" max="560" step="8">
+          <button type="button" class="step" data-step="8" data-target="bkWidth" aria-label="increase sidebar width">+</button>
+          <em class="set-val" id="val-bkWidth"></em>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-drWidth">Drawer width</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-8" data-target="drWidth" aria-label="decrease drawer width">&minus;</button>
+          <input type="range" id="set-drWidth" min="256" max="520" step="8">
+          <button type="button" class="step" data-step="8" data-target="drWidth" aria-label="increase drawer width">+</button>
+          <em class="set-val" id="val-drWidth"></em>
+        </div>
+      </div>
+    </section>
+
+    <section class="set-group" id="grp-wallpapers">
+      <h3 class="set-label">wallpapers</h3>
+
+      <div class="set-row wall-tools">
+        <input type="url" id="wallAddInput" class="wall-add-input" placeholder="https://images.unsplash.com/…" aria-label="add wallpaper url" spellcheck="false">
+        <button type="button" class="btn-secondary" id="wallAdd">add</button>
+        <button type="button" class="btn-secondary wall-reload" id="wallReload" title="load a different set of 10 wallpapers from wallhaven" aria-label="reload wallpapers from wallhaven">reload</button>
+        <span class="wall-loading" id="wallLoading" hidden aria-hidden="true"><i></i><i></i><i></i></span>
+        <em class="wall-status" id="wallStatus" aria-live="polite"></em>
+      </div>
+      <div class="set-row wall-filter">
+        <span class="set-name">Purity</span>
+        <div class="seg" role="group" aria-label="wallpaper purity">
+          <button type="button" class="seg-btn" data-wall-purity="100">sfw</button>
+          <button type="button" class="seg-btn" data-wall-purity="110">sketchy</button>
+          <button type="button" class="seg-btn" data-wall-purity="111">nsfw</button>
+        </div>
+      </div>
+      <div class="set-row wall-filter">
+        <span class="set-name">Category</span>
+        <div class="seg" role="group" aria-label="wallpaper category">
+          <button type="button" class="seg-btn" data-wall-category="100">general</button>
+          <button type="button" class="seg-btn" data-wall-category="010">anime</button>
+          <button type="button" class="seg-btn" data-wall-category="001">people</button>
+        </div>
+      </div>
+      <div class="set-row wall-filter">
+        <label class="set-name" for="wallKey">API key</label>
+        <input type="password" id="wallKey" class="wall-add-input" placeholder="optional — unlocks NSFW" autocomplete="off" spellcheck="false" aria-label="wallhaven API key (optional, unlocks NSFW)">
+      </div>
+      <div class="set-row wall-grid" id="wallGrid"></div>
+      <div class="set-row fav-tools">
+        <span class="set-name">Favourites</span>
+        <button type="button" class="btn-secondary" id="favAdd" title="save the current wallpaper (f)" aria-label="favourite the current wallpaper">add current</button>
+        <em class="fav-status" id="favStatus" aria-live="polite"></em>
+      </div>
+      <div class="set-row wall-grid fav-grid" id="favGrid"></div>
+      <div class="set-row fav-tools">
+        <span class="set-name">Safe wallpaper</span>
+        <button type="button" class="btn-secondary" id="safeSet" title="save the current wallpaper as your default (space)" aria-label="set current wallpaper as safe">set current</button>
+        <button type="button" class="btn-secondary" id="safeApply" title="apply your safe wallpaper (double space)" aria-label="apply the safe wallpaper">apply</button>
+        <em class="fav-status" id="safeStatus" aria-live="polite"></em>
+      </div>
+      <div class="set-row toggle">
+        <span class="set-name">Monochrome wallpaper</span>
+        <label class="switch" aria-label="monochrome wallpaper">
+          <input type="checkbox" id="set-wallMono">
+          <span class="track" aria-hidden="true"></span>
+        </label>
+      </div>
+
+      <div class="set-row">
+        <label class="set-name" for="set-blur">Background blur</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-2" data-target="blur" aria-label="decrease background blur">&minus;</button>
+          <input type="range" id="set-blur" min="0" max="30" step="2" data-unit="px">
+          <button type="button" class="step" data-step="2" data-target="blur" aria-label="increase background blur">+</button>
+          <em class="set-val" id="val-blur"></em>
+        </div>
+      </div>
+    </section>
+
+    <section class="set-group" id="grp-sync">
+      <h3 class="set-label">sync</h3>
+
+      <div class="set-row sync-row">
+        <span class="sync-pill off" id="syncPill" role="status" aria-live="polite">
+          <span class="sync-dot" id="syncDot"></span>
+          <em id="syncStatus" class="sync-text">starting…</em>
+        </span>
+        <button type="button" class="btn-secondary" id="syncNow">sync now</button>
+      </div>
+      <div class="set-row storage-row">
+        <span class="set-name">Storage</span>
+        <div class="storage-chips">
+          <span class="st-chip"><em>id</em><b id="stId">…</b></span>
+          <span class="st-chip"><em>local</em><b id="stLocal" class="st-val">…</b></span>
+          <span class="st-chip"><em>ext</em><b id="stExt" class="st-val">…</b></span>
+        </div>
+      </div>
+      <div class="set-row reset-row">
+        <span class="set-name">Restore defaults</span>
+        <button type="button" class="btn-reset" id="resetSettings">reset all</button>
+      </div>
+    </section>
+
+    <section class="set-group" id="grp-keys">
+      <h3 class="set-label">keys</h3>
+      <ul class="keys">
+        <li><kbd>h j k l</kbd> move</li>
+        <li><kbd>enter</kbd> <kbd>o</kbd> open</li>
+        <li><kbd>tab</kbd> page</li>
+        <li><kbd>/</kbd> command bar</li>
+        <li><kbd>a e d</kbd> add · edit · del</li>
+        <li><kbd>g</kbd> <kbd>shift g</kbd> first · last</li>
+        <li><kbd>s</kbd> <kbd>esc</kbd> settings</li>
+        <li><kbd>b</kbd> bookmarks</li>
+        <li><kbd>w</kbd> <kbd>r</kbd> wallpaper · reload</li>
+        <li><kbd>f</kbd> <kbd>shift f</kbd> favourite · favourites as pool</li>
+        <li><kbd>space</kbd> <kbd>space space</kbd> safe wallpaper · apply</li>
+      </ul>
+    </section>
+  </div>
+</aside>
+
+<div class="modal-backdrop" id="modal" hidden>
+  <form class="modal" id="siteForm" novalidate>
+    <h3 class="modal-title" id="modalTitle">add shortcut</h3>
+    <label class="field"><span>name</span><input id="siteName" type="text" placeholder="auto-detected from url" autocomplete="off" spellcheck="false"></label>
+    <label class="field"><span>url</span><input id="siteUrl" type="text" placeholder="example.com" autocomplete="off" spellcheck="false"></label>
+    <span class="meta-status" id="metaStatus" hidden>detecting title…</span>
+    <div class="field icon-field">
+      <span>icon</span>
+      <div class="icon-picker" id="iconPicker" role="radiogroup" aria-label="choose an icon"></div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="modalCancel">cancel</button>
+      <button type="submit" class="btn-primary">save</button>
+    </div>
+  </form>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/sync.js"></script>
+<script src="js/walls.js"></script>
+<script src="js/bookmarks.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

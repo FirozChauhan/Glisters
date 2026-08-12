@@ -1,0 +1,597 @@
+# Glisters — Developer / AI Guide
+
+This document is the single source of truth for understanding the Glisters
+codebase. It is written for both human developers and AI agents working on the
+code. Read this before touching any file.
+
+---
+
+## 1. What this project is
+
+**Glisters** is a minimal, keyboard-first Chrome extension that replaces the
+new-tab page. It renders a vim-controlled grid of shortcut tiles, a right-edge
+bookmarks sidebar that mirrors (and edits) Chrome's real bookmarks, a left-edge
+settings drawer, an optional wallpaper pool pulled from Wallhaven, and a
+Cloudflare-Worker-backed sync layer so the whole save file mirrors to R2.
+
+Key characteristics:
+
+- **Manifest V3** extension; the new tab override is served *directly* (no
+  redirect), so Chrome keeps the address bar focused by default — keys land in
+  the page only after the user clicks or tabs into it (`js/app.js:1861`).
+- **Plain ES5-style JavaScript** (IIFEs, `var`, closures). No bundler, no
+  framework, no npm runtime deps for the extension itself. Node is used only
+  for two tiny build scripts (`scripts/`).
+- **Vanilla DOM APIs** for all rendering (each module builds its own DOM nodes).
+  No HTML injection anywhere: user/cloud/Chrome-supplied strings are always
+  rendered via `textContent`; `innerHTML` is used only for static inline SVG
+  icons and container clears.
+- **Three cooperating modules** in global namespace communicated through
+  guarded hooks (`window.SYNC`, `window.BOOKMARKS`, `window.WALLS`,
+  `window.CONFIG`) plus the core `js/app.js`.
+- One **shared save document** ("the doc") that everything persists and syncs.
+
+### Architecture at a glance
+
+```
+manifest.json  →  newtab.html  (Chrome newtab override)
+                      │  loads in order:
+                      ├─ js/config.js     (runtime constants; generated)
+                      ├─ js/sync.js       (window.SYNC — cloud push/pull)
+                      ├─ js/walls.js      (window.WALLS — wallpapers)
+                      ├─ js/bookmarks.js  (window.BOOKMARKS — sidebar)
+                      └─ js/app.js        (window.CONFIG consumer — grid/core)
+css/main.css, css/bookmarks.css   (theme: tokens in :root)
+icons/  (generated 16/48/128 PNGs)
+scripts/gen-config.mjs / gen-icons.mjs  (Node build helpers)
+worker/  (Cloudflare Worker → R2 bucket "SAVE")
+links.txt  (optional first-run seed, one URL per line)
+```
+
+---
+
+## 2. Environment & runtime facts
+
+| Thing | Value |
+|---|---|
+| Language | JavaScript (ES5-style), HTML, CSS |
+| Runtime | Browser extension (Chrome MV3), plus Node ≥18 for scripts & the Worker |
+| No package.json | correct — nothing to `npm install` for the extension |
+| Git | local git repository (initialized; no remote configured yet) |
+| Secrets | `.env` (gitignored) + `js/config.js` (gitignored, generated) |
+
+`js/config.js` is **generated, never hand-edited** — it is re-written by
+`node scripts/gen-config.mjs` from `.env`. `.gitignore` excludes `.env`,
+`js/config.js`, `node_modules/`, and `.freebuff/` (a local SQLite scratch dir,
+unrelated to the app).
+
+---
+
+## 3. File-by-file reference
+
+### 3.1 `manifest.json`
+- MV3; `chrome_url_overrides.newtab → newtab.html`.
+- Permissions: `storage`, `bookmarks`; `host_permissions: https://*/*` (needed
+  for direct favicon/title fetches and any https source).
+- CSP for extension pages: no inline scripts, `connect-src 'self' https:`.
+- A pinned `key` (line 6) keeps the extension id stable — churning ids orphan
+  all `chrome.storage` data (the settings drawer's Storage chips exist to
+  surface exactly this).
+
+### 3.2 `newtab.html`
+Static shell only. Notable pieces:
+- Fonts load asynchronously via `media="print"` + `onload="this.media='all'"`
+  so first paint never blocks on `fonts.googleapis.com`.
+- `#grid` (shortcut tiles) starts `mouse-nav` so the focus ring stays hidden
+  until first keyboard nav.
+- Command `#bar` (summoned with `/` or `:`); placeholder hints it also accepts
+  pasted images for Google reverse image search.
+- `#bk` bookmarks aside, `#drawer` settings aside, `#modal` add/edit form.
+- Script order matters (listed in §1): config → sync → walls → bookmarks →
+  app.
+- Arabic signature `<p class="page-sig">فیروز خان چوہان` floats bottom-right.
+
+### 3.3 `css/main.css`
+Theme tokens in `:root` (`--page`, `--card`, `--surface`, `--fg`, `--line`,
+fonts, `--radius: 0px` for the sharp-corner look). `#wallLayer` (managed by
+walls.js) sits fixed behind content with `filter: blur(var(--wall-blur))`,
+monochrome via `html.wall-mono`. Includes all grid/tile, page-flip animations
+(`anim-next/prev/snapshot`), right-click ctx buttons, empty state, command bar,
+drawer, sliders/switches/toggles, sync pill state colors, wallpaper grids,
+buttons, modal, icon picker. Honors `prefers-reduced-motion`.
+
+### 3.4 `css/bookmarks.css`
+Self-contained styles for the right-edge sidebar (`.bk*`): slide-over, rows,
+focus/armed states, breadcrumbs, inline editor, empty state, drag drop targets.
+
+### 3.5 `js/app.js` (core, ~1864 lines)
+The heart. Renders the grid, owns one shared `state` object, vim keys, modal,
+drawer, drag-reorder, page flips, and orchestrates the other modules.
+
+**Public surface exposed to others** (all guarded with existence checks):
+- Reads `window.CONFIG` (`CF = window.CONFIG || {}`), `window.SYNC`,
+  `window.BOOKMARKS`, `window.WALLS`.
+
+**Module state** (top of the IIFE):
+- `STORE_KEY = 'glisters'` — localStorage + chrome.storage key for the main
+  doc. `SEED_VERSION = 2` — bump to force re-seeding of existing installs.
+- `DEFAULTS` — clean-state doc with full `settings` defaults.
+- `state` — live in-memory doc (`version`, `updatedAt`, `sites[]`, `settings`,
+  plus `bookmarks`/`walls` slices added by `doc()`).
+- `focused` / `armed` (indices), `page`, `mode`
+  (`'none' | 'drawer' | 'modal' | 'bar'`), various timers.
+
+**State lifecycle**
+- `readLocal()` → parse `localStorage['glisters']`.
+- `normalize(o)` — the cloud-safety gate. Clamps site name ≤300, url ≤4096,
+  only accepts `https?://` icons, validates every numeric setting, defaults
+  booleans, keeps `bookmarks`/`walls` slices only if objects. `restoreFromStorage()`
+  reads the durable `chrome.storage.local` copy if localStorage misses.
+- `persistLocal()` writes BOTH localStorage and `chrome.storage.local`.
+- `doc()` returns the full saveable doc, including `window.BOOKMARKS.forDoc()`
+  and `window.WALLS.forDoc()` slices.
+- `commit(opts)` — stamps `updatedAt`, re-renders (unless `noRender`),
+  persists, and schedules a cloud push (unless `noCloud`).
+
+**links.txt seeding**: On a fresh install (`needSeed`), if no stored doc is
+recoverable, it fetches `links.txt` (`loadLinks()`), derives display names via
+`nameForUrl()` (title-case map `TITLE_CASE`, `prettyBase`, Google-product
+detection), dedupes names, and seeds `state.sites`. Sets `seededFromLinks`
+so a first cloud sync prefers the cloud copy over the seed.
+
+**Favicon resolution** (`iconCandidates`, `loadIcon`, caches) — critical
+subsystem:
+- Candidate order: user-picked `site.icon` → curated `OFFICIAL_ICONS` (host+
+  path mapped, e.g. `google.com/maps → maps.google.com` pin via `officialIcon`)
+  → site's own `apple-touch-icon.png` / `favicon-32x32.png` / `favicon.ico` →
+  Google s2 re-render for host + parent-domain variants → DuckDuckGo.
+- `preferred` candidates settle early; others compete largest-wins; a 6s guard
+  finalizes; a `w<16` (or `w<=16` for chip/s2) result never settles (avoids
+  the generic 16px Google globe 404-default).
+- Small favicons get integer nearest-neighbour upscaling (`.sharp`) — never
+  fractional, to avoid pixelated glitch.
+- **Three layers of cache recognized by the code**:
+  1. `faviconCache` (in-memory decoded elements) — page flips reuse instantly;
+  2. `iconLoading` — in-flight guard to avoid double work;
+  3. `persistedIcons` (`localStorage` + `chrome.storage`, key
+     `'glisters-icons'`, debounced 400ms write) — cross-session winner, tried
+     first so repeat boots are one cache-hit request per tile.
+- Failures (`faviconCache[key] === false`) are retried with backoff (n*5000ms,
+  up to 3) and again on `online`; a stale persisted winner 404s and provokes
+  full re-resolution.
+
+**Vim keyboard map** (`keydown`, `js/app.js:843`):
+`h j k l`/arrows move · `g`/`G` first/last · `Home`/`End` ·
+`tab`/`shift+tab` page next/prev · `enter`/`o` open (ctrl/meta+enter or o opens
+new tab) · `a` add · `e` edit · `d` delete (arm once, confirm on second `d` in
+2.5s) · `s` settings drawer · `/` or `:` command bar · `esc` close · `d`-arm is
+cancelled by any other handled key. Keys ignored while typing in inputs.
+
+**Mouse**: wheel→horizontal page flip (throttled 180ms) with ctrl exempt;
+hover sets focus but keeps `mouse-nav` ring hidden; click opens (ctrl/meta =
+new tab); right-click overlays edit/delete ctx buttons on the icon; custom
+pointer-based **drag-reorder** with ghost, edge auto-flip across pages
+(480ms interval when within 70px of edge), drop-before on tiles/append on empty
+grid area/cancel outside grid, followed by a ghost-click suppression
+(`suppressClick`).
+
+**Pagination**: `pageCount()` = ceil(sites/capacity), capacity =
+`cols×rows`. Pages loop; wrap direction tracks travel direction. Page flips use
+a cloned `page-snapshot` ghost (two-layer slide) cleaned on `animationend` + a
+600ms safety timer.
+
+**Settings drawer**: `syncDrawerDisplay()` mirrors state into the inputs only
+when open. Sliders apply **live CSS-only changes** and a 250ms-debounced heavy
+commit; only `cols`/`rows` rebuild the grid (capacity change). Step buttons
+(`−`/`+`) clamp to input min/max. Section jump-nav (`syncSetNav`) highlights
+the group currently in view on scroll.
+
+**Modal (add/edit)**:
+- `openModal(site)` / `closeModal()`. Editing stores `editingIdx`.
+- Title auto-detect (`detectMeta`/`fetchMeta`): direct `fetch` first (host
+  permission bypasses CORS), falls back to the worker's `/meta` route. Optimistic
+  name from hostname, never overwrites the user's typing.
+- `parseMetaHtml` extracts og:title → twitter:title → `<title>` and up to 8
+  `<link rel="icon">` URLs. `META_MAX = 4MB`, 8s abort, per-url cache.
+- Icon picker (`renderIconPicker`): "auto" option (``) plus up to 8 circular
+  candidates from the same machinery as the grid, plus page-declared icons.
+  Picked icon stored on the tile and re-selected on edit.
+- On submit, editing clears url/icon caches when url or icon changed so the
+  tile re-resolves.
+
+**Command bar**: `/` or `:` opens `#bar`. Submit matches a site by exact name
+→ substring → treats as URL/domain → Google search fallback. Paste-handler
+reverse image searches: image file → POST to Google upload form (hidden,
+`target=_blank`); image URL → `searchbyimage?image_url=`.
+
+**Cloud sync orchestration** (uses `window.SYNC`):
+- `scheduleCloud()` marks dirty, spawns `pushCloud` after 1300ms.
+- `pushCloud()`: `SYNC.push(doc())`. On 409 conflict → `SYNC.pull()` and
+  `adoptRemote` the newer doc. On network error → dirty, retry every 20s.
+- `adoptRemote(remote)` — `normalize` + hand slices to BOOKMARKS/WALLS.
+- `syncStart()` boot logic: real-local-edits vs fresh-install prefer cloud;
+  the cloud wins only if `remote.updatedAt > state.updatedAt && !dirty`.
+- Reconnect listeners: `online` (push or retry seed), `pagehide` (best-effort
+  push), `visibilitychange`→visible (push if dirty).
+- `storageProbe()` writes `__probe__` round-trips to verify localStorage &
+  chrome.storage survive reloads; shows the extension id (first 8 chars).
+
+### 3.6 `js/sync.js` (~42 lines)
+Thin Cloudflare-Worker client. `base` from `window.CONFIG.worker ||
+endpoint`. `req(method, body)`:
+- `GET /save` → doc JSON; 404 → `null`; 409 → `{ conflict: true }`.
+- `PUT /save` → `true` on success.
+Exposes `window.SYNC = { cfg, push, pull }`. Disabled (rejects) when no worker
+URL is configured.
+
+### 3.7 `js/walls.js` (~1035 lines) — wallpapers
+Sinks to `window.WALLS = { bind, forDoc, restore, next, refresh, reload,
+filter, key, fav, favPool, setSafe, applySafe }`.
+
+**Source**: Wallhaven keyless API `search?sorting=toplist&topRange=1M&per_page=24`,
+purity/category bitmasks (`100/110/111`, `100/010/001`), optional `&apikey=`.
+NSFW (`111`) is disabled without an API key. `CFG_KEY` (from config, from .env)
+seeds the drawer key field. Picks random pages (up to 3 tries) to fill 10
+wide shots (aspect ≥1.5, filtered client-side). Offline fallback: curated
+Unsplash set (`FALLBACK`).
+
+**State** (persists under `localStorage['glisters-walls']` + chrome.storage +
+inside the app doc via `forDoc`/`restore`/`adopt`): `{v:9, key, list[10],
+lastRefresh, purity, category, apikey, favs[≤60], safe}`. `KEY_RE` gates keys
+(`[A-Za-z0-9]{8,64}`). Old saves (v<6) are dropped to rebuild from Wallhaven.
+
+**Wallpaper blob cache** (performance core):
+- `<img>` preloading warms the browser HTTP cache (needs no CORS — works even
+  on a dev server / file://).
+- Bonus Cache Storage layer (`caches.open('glisters-walls-v1')`) reuses those
+  bytes with `cache:'force-cache'`; applying resolves to a **blob URL**
+  (`materialize`) for near-instant, offline-capable swaps.
+- `prefetchPool()` warms 3 at a time. `pruneBlobs()` revokes blob URLs and
+  deletes cache entries that left the pool (always keeps current shot + all
+  favourites + safe). 24h freshness: `setInterval(refreshPool(true), 24h)` and
+  a delayed boot check.
+
+**Security**: `safeWallUrl()` re-parses any incoming wallpaper url into a plain
+http(s) URL with quotes escaped before it ever reaches `background-image`.
+
+**Interactions**: drawer grid + favourites grid (lazy thumbs), purity/category
+segmented pickers (swapping a filter pulls a matching pool with
+`different:true`), API-key field, add-URL + per-item remove (only for hand-added
+urls; `isBuiltin`), reload button (`different:true` — drops current pool first).
+
+**Keys handled here** (bare page only, `keydown` guard at `js/walls.js:960`):
+`w` next pool cycle · `r`/`R` reload · `f` favourite current · `F` favourites
+become the pool · `space` single = save current as safe, double-space (within
+350ms window) = apply safe.
+
+### 3.8 `js/bookmarks.js` (~1403 lines) — bookmarks sidebar
+Sinks to `window.BOOKMARKS = { bind, forDoc, restore, refreshFromChrome }`.
+
+**Data model**: flat arrays `STORE.folders` / `STORE.items` with `{id,
+chromeId?, name, url?, parent, index}`; `parent === null` means root. `v:1`.
+Persists under `localStorage['glisters-bk']` + chrome.storage + app doc slice.
+`localStorage['glisters-bk-ui']` holds only the open state.
+
+**Tombstones** (`STORE.deletedChromeIds`): monotonic; once a chrome node is
+deleted locally it must never be re-imported. Unioned on every adopt, never
+replaced; `purgeTombstoned()` heals zombie imports from pre-tombstone boots.
+`adopt()` keeps the authoritative local store when it is newer
+(`STORE.updatedAt > incomingAt`) but still unions incoming deletions; boot
+order guarantees the durable store is loaded before the first Chrome merge.
+
+**Chrome integration** (requires `bookmarks` permission; degrades gracefully):
+- `mergeChromeTree()` — one-way mirror import: `chrome.bookmarks.getTree()`,
+  upserts links by chromeId or name-match; hand-made nodes are never touched;
+  Chrome-side deletions do NOT remove sidebar nodes; tombstoned nodes skipped.
+  Auto-runs after boot and every restore, on demand via the header refresh
+  button (`refreshFromChrome`).
+- **Write-through**: add/edit/delete/move mirror into `chrome.bookmarks`
+  (create/update/remove/removeTree/move). Local mirror is optimistic,
+  chromeIds backfilled from API results. `materializeNode`/
+  `materializeParentChain` push local-only nodes (and folders' children)
+  into Chrome on demand. `chromeParentId` falls back through Other bookmarks
+  id '2' / Mobile '3' if the bar ('1') was tombstoned.
+
+**Sidebar UI**: `b`/`B` toggles (capture-phase handler; `stopPropagation` so
+the grid never sees consumed keys). Drill-down folders; back (`h`/`←`) lands
+focus on the folder you left; breadcrumbs (`home / folder / …`). Keys: `j k`
+move · `enter`/`o`/`l`/`→` open · `a` add link · `A` add folder · `e`/`E` edit
+· `d`/`D` delete (arm+confirm) · `g`/`G` first/last · `esc`/`b` close ·
+`tab` consumed (so grid doesn't paginate). Rows are `draggable` (HTML5 DnD):
+drop-into folders / before siblings / onto root, mirrored to Chrome via
+`moveNode`. Inline editor for add/edit. Links open in a **background** tab
+(`chrome.tabs.create {active:false}`), never navigating the page itself;
+synthetic-click fallback sets `ignoreOutsideClick` so the outside-click close
+doesn't fire. Right-edge position; outside click (capture phase, decided before
+row re-renders detach the target) closes it.
+
+Favicon resolution duplicates app.js's official-icon map + candidates + the
+shared `'glisters-icons'` persisted cache (self-contained by design).
+
+### 3.9 `js/config.js` (generated) / `js/config.example.js`
+`window.CONFIG = { worker, wallhavenKey?, generatedAt }`. `config.example.js`
+is a stub. Never hand-edit `config.js`.
+
+### 3.10 `worker/src/index.js` (~186 lines) — Cloudflare Worker
+- R2 binding `env.SAVE` holds the key `'Glisters/save.json'`.
+- Routes: `OPTIONS` preflight (CORS `*`); `GET/PUT /save`;
+  `GET /meta?url=` (server-side title/icon scraping, CORS-free).
+- **Last-write-wins**: PUT parses incoming `updatedAt`, compares with the
+  stored doc; if stored is newer → `409` so the client pulls and adopts.
+- **SSRF guard** (`isPrivateHost`) on `/meta`: only public http(s), ports
+  80/443; rejects localhost/`.local`/`.internal`/metadata, all private IPv4
+  ranges (0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24,
+  192.168/16, 198.18/15, 224/4+), private IPv6 (::1, fc/fd, fe8-feb,
+  ::ffff:127.). Redirects are followed manually (≤3 hops) with the guard
+  **re-run per hop**. 4MB body cap, browser UA. Failures → empty `{title:'',
+  icons:[]}` rather than an error.
+
+### 3.11 `worker/wrangler.toml`
+Worker name `glisters`; `main = "src/index.js"`; `compatibility_date
+= "2024-11-01"`; `[[r2_buckets]]` binding `SAVE` → the R2 bucket named in
+`wrangler.toml`. Deploy: `wrangler deploy`.
+
+### 3.12 `scripts/gen-config.mjs`
+Parses `.env` (simple `KEY=VALUE` lines), requires `R2_WORKER_URL`, optional
+`WALLHAVEN_API_KEY`, writes `js/config.js` as JSON with `worker`,
+`wallhavenKey`, `generatedAt`. **Run `node scripts/gen-config.mjs` after
+editing `.env`.**
+
+### 3.13 `scripts/gen-icons.mjs`
+Generates `icons/icon{16,48,128}.png` with a hand-rolled PNG encoder (zlib
+deflate + CRC32): dark square, thin light frame, hollow centre. Zero image
+dependencies. Run `node scripts/gen-icons.mjs`.
+
+### 3.14 `links.txt`First-run seed, one URL per line (a small sample ships in the repo; delete or edit it to taste — an absent file feeds gracefully to `loadLinks()` failing). Names are
+derived at seed time. Bump `SEED_VERSION` in app.js to re-seed existing
+installs.
+
+### 3.15 `icons/`
+16/48/128 PNGs (generated). Referenced in manifest + visual only.
+
+### 3.16 `.env` / `.env.example`
+`.env` holds `R2_WORKER_URL` (deployed worker URL) and optional
+`WALLHAVEN_API_KEY`. Committed keys in the live `.env` today: the deployed worker URL
+and a wallhaven key — both are public-scope secrets by design (see
+Security). **Never commit real secrets elsewhere.**
+
+---
+
+## 4. The shared save document ("the doc")
+
+Serialize me with `app.doc()`; the cloud worker stores one object at
+`Glisters/save.json`.
+
+```jsonc
+{
+  "version": 2,                // SEED_VERSION in app.js
+  "updatedAt": 1723456789012,  // ms epoch; LWW arbiter
+  "sites": [
+    { "id": "…", "name": "GitHub", "url": "https://github.com",
+      "icon": "https://…" /* optional */ }
+  ],
+  "settings": {
+    "iconSize": 72, "colGap": 24, "rowGap": 22, "cols": 6, "rows": 5,
+    "labels": true, "labelOp": 100, "labelColor": "#f5f5f5",
+    "bkWidth": 360, "drWidth": 320, "mono": false, "wallMono": false,
+    "blur": 0
+  },
+  // joined only when the module is present (guarded):
+  "bookmarks": { "v": 1, "updatedAt": 0, "folders": [], "items": [], "deletedChromeIds": [] },
+  "walls": { "v": 9, "key": "…url…", "list": ["…10 urls…"], "lastRefresh": 0,
+             "purity": "100", "category": "100", "apikey": "", "favs": [], "safe": "" }
+}
+```
+
+Slices are validated by their owners (`normalize` in app.js, `setData`/`adopt`
+in the modules). A missing/stale slice must never erase what the user already
+chose — that is why `adopt()` in walls.js restores the previous state when the
+incoming doc is empty/stale, and bookmarks `adopt()` keeps local state when it
+is newer while still unioning tombstones.
+
+**Conflict semantics**: worker rejects PUTs whose `updatedAt` is older than the
+stored one (409). The client then pulls and adopts the newer doc. This is the
+"silent data loss" guard — never break it.
+
+---
+
+## 5. Storage layers (in priority order)
+
+1. `state` — in-memory, canonical.
+2. `localStorage` — fast synchronous read at boot; *not* durable across
+   extension reloads.
+3. `chrome.storage.local` — the durable mirror (survives reloads and local
+   storage eviction). Each module keeps its own key(s):
+   - `glisters` (app doc), `glisters-icons` (shared favicon winner map),
+   - `glisters-walls` (wallpaper doc), `glisters-bk` (sidebar doc),
+     `glisters-bk-ui` (panel open state).
+4. Cloud (R2 via Worker) — mirror + multi-device; only `Glisters/save.json`.
+
+Rule of thumb: **chrome.storage is authoritative for durability; localStorage
+is the fast path; cloud is a mirror that newer-wins.** Boot always reconciles
+chrome.storage into memory before doing destructive work (see bookmarks boot
+ordering).
+
+---
+
+## 6. Module contract (hooks)
+
+Modules are independent IIFEs that expose a guarded object; **app.js owns the
+only `commit()` and calls module hooks; modules never call app.js directly.**
+
+| Hook | Owner | Signature | Used by |
+|---|---|---|---|
+| `window.CONFIG` | config.js | `{ worker, wallhavenKey, generatedAt }` | app/sync/walls |
+| `window.SYNC` | sync.js | `{ cfg, push(doc)→Promise, pull()→Promise }` | app.js |
+| `window.BOOKMARKS` | bookmarks.js | `{ bind(cb), forDoc(), restore(obj), refreshFromChrome() }` | app.js |
+| `window.WALLS` | walls.js | `{ bind(cb), forDoc(), restore(obj), next, refresh, reload, filter, key, fav, favPool, setSafe, applySafe }` | app.js |
+
+`bind(commit)` hands the app's `commit()` to a module so any module-side change
+triggers `persistLocal` + cloud push on the whole doc. `forDoc()` supplies the
+module's slice. `restore(obj)` adopts an incoming slice (validated). app.js
+accessed these as `window.BOOKMARKS`/`window.WALLS` with existence checks
+(`if (window.BOOKMARKS)`), so either module failing to load never breaks the
+grid.
+
+---
+
+## 7. Key flows
+
+### Boot (app.js init, `js/app.js:1813`)
+1. `loadPersistedIcons()` sync-read into memory (before first render).
+2. `renderAll()` on current (possibly seeded) state.
+3. If `needSeed`: try `chrome.storage.local` restore → else `links.txt` → else
+   empty. Marks `seededFromLinks`.
+4. `syncStart()`: reconcile cloud (see §4/§5 rules).
+5. `BOOKMARKS.bind(commit)` + `restore(state.bookmarks)`; same for WALLS.
+Note the page never steals focus (address bar keeps it) — keys only live after
+the user clicks/tabs in.
+
+### Cloud sync decision (app.js)
+- Local edits → `commit()` → `scheduleCloud()` → push in 1.3s.
+- Push failure → dirty, retry 20s + on `online`/focus/unload.
+- Push 409 → pull newer, `adoptRemote`.
+- Boot pull → newer remote (and not locally dirty) wins via `adoptRemote`;
+  otherwise push local.
+
+### Favicon for a tile
+`tileEl` → cached decoded element? reuse. Else `persistedIcons[key]` (single
+preferred candidate) → else `iconCandidates(site)` → `loadIcon` races
+preferred-first, largest-wins-fallback with 6s guard → winner cached in
+`faviconCache` + debounced-persisted; failures scheduled for 5/10/15s retries.
+
+### Wallpaper apply
+`state.key` url → `safeWallUrl` → blob URL if `materialize`d (instant), else
+real url now and swap to blob when ready → background swapped, current badge
+highlighted, doc touched (cloud push). Blobs/cache pruned to the pool + favs +
+safe.
+
+### Bookmark add (write-through)
+Editor save → optimistic STORE push → `touch()` → render →
+`withChromeNode` materializes parent chain + node into chrome → chromeId
+backfilled. Deleting tombstones chromeIds (re-duplicated in Chrome and STORE,
+so the async merge window can't resurrect them).
+
+---
+
+## 8. Keyboard reference (consolidated)
+
+| Key | Grid | Bookmarks | Wallpapers (bare page) |
+|---|---|---|---|
+| `h j k l` / arrows | move | move / back | — |
+| `enter`/`o` | open (ctrl/meta + enter/o = new tab) | open link/folder | — |
+| `tab`/shift+tab | page | (consumed) | — |
+| `/` `:` | command bar | — | — |
+| `a` / `A` | add | add link / add folder | — |
+| `e` | edit | edit | — |
+| `d` | delete (arm) | delete (arm) | — |
+| `g` / `G` | first / last | first / last | — |
+| `s` | settings drawer (esc closes) | — | — |
+| `b` / `B` | — | toggle sidebar | — |
+| `w` | — | — | next wallpaper |
+| `r` / `R` | — | — | reload pool |
+| `f` / `F` | — | — | favourite / favourites-pool |
+| `space` (×1/×2) | — | — | save safe / apply safe |
+| `esc` | close anything | close | — |
+
+---
+
+## 9. Security model (already implemented — preserve it)
+
+- **No HTML injection**: `textContent` for all dynamic strings; static SVG via
+  `innerHTML` only.
+- **CSP** in manifest: no inline scripts; only self + https connects; images
+  https/data/blob.
+- **URL guarding**: `normUrl()` in app.js and bookmarks.js only ever navigate
+  to `http(s)`/`mailto` — `javascript:`/`data:`/`file:` are dropped
+  (cloud-save tamper defense).
+- **Cloud-boundary sanitizing**: site name ≤300, url ≤4096, icons must be
+  `https://`; `safeWallUrl()` re-parses wallpaper urls before
+  `background-image`; bookmarks `setData` cleans each node.
+- **Worker SSRF guard** on `/meta` with per-hop redirect re-validation and 4MB
+  caps.
+- **Worker PUT is unauthenticated by design** — treat R2 as public scratch
+  storage; never store private data there.
+- **PK (known limitation)**: anyone with the worker URL can overwrite the save;
+  conflict/409 logic limits only accidental clobbering, not malice.
+
+---
+
+## 10. Performance notes (things the code optimizes)
+
+- Favicon winners persisted across sessions: repeat boots ≈ 1 cache-hit request
+  per tile instead of a 4–6 candidate blast.
+- `loadIcon` decodes async (`decoding='async'`, `referrerPolicy='no-referrer'`),
+  upscales small favicons integer-only (`.sharp`).
+- Page flips clone a snapshot + animate; ghosts removed on `animationend`
+  + 600ms safety.
+- Wallpapers: `<img>` warming → HTTP cache; Cache Storage → blob URLs; pruning
+  bounds memory/disk; drawer thumbs lazy.
+- Slider edits: live CSS via `applyCssVars()`, heavy `commit` debounced 250ms;
+  only capacity changes rebuild the grid.
+- Fonts async; preconnects to fonts/gstatic/wallhaven/DDG.
+- Meta fetch capped at 4MB + 8s abort + per-url cache.
+
+---
+
+## 11. Conventions to follow
+
+1. **ES5 style**: IIFEs, `'use strict'`, `var`, closures, no arrow functions in
+   the extension (worker may use modern JS).
+2. **Self-contained modules**: each feature file keeps its own DOM refs, state,
+   keys, persistence keys, and public object. Communicate with app.js only via
+   the guarded hooks in §6.
+3. **Never mutate app doc in a module without `touch()`/`bind` commit**.
+4. **Guard all cross-module access** (`if (window.X)`) — missing modules must
+   never break the page.
+5. **Always sanitize values that cross the cloud boundary** (see §9).
+6. **`textContent` for data, `innerHTML` only for static SVG**.
+7. **chrome.storage is the durable copy; boot must reconcile it before
+   destructive work.**
+8. Bump `SEED_VERSION` (app.js) deliberately and document why; bump walls doc
+   `v` only with a migration path.
+9. Run `node scripts/gen-icons.mjs` (initial) and `node scripts/gen-config.mjs`
+   (after `.env` changes). No lint/typecheck/build pipeline exists — the app is
+   plain script tags; validate by loading the extension.
+
+---
+
+## 12. Deployment & wiring
+
+Frontend:
+1. `node scripts/gen-config.mjs` (needs `.env`).
+2. `chrome://extensions` → Developer mode → Load unpacked → this folder.
+3. Reload the extension after config changes.
+
+Cloud:
+1. `cd worker && wrangler deploy` (requires the R2 bucket + `SAVE`
+   binding declared in `wrangler.toml`).
+2. Put the returned URL in `R2_WORKER_URL` inside `.env`.
+3. Re-run `gen-config.mjs`, reload the extension; settings → sync pill should
+   read `synced`.
+
+---
+
+## 13. Known quirks & gotchas (read before editing)
+
+- `linka.txt` seeding failures are silent — a fresh install with no `links.txt`
+  seeds an empty grid and shows the empty state.
+- `window.open(url,'_blank','noopener')` returns `null` per spec, so
+  bookmarks.js intentionally uses the synthetic-`<a>` fallback with
+  `ignoreOutsideClick` to avoid the outside-click-to-close handler firing.
+- `suppressClick` clear is deferred (`setTimeout 0`, capture-phase listener) so
+  the grid's bubble click still gets its suppress chance after a drag ends
+  outside the grid.
+- Wallhaven: guests can't request NSFW; the NSFW purge button is disabled
+  without a key; removing the key while on NSFW drops back to Sketchy (`110`).
+- `isBuiltin()` decides which wall tiles show a remove control — sourced
+  Wallhaven/Fallback items can't be removed, only hand-added URLs.
+- Favourites + safe wallpaper are deliberately **kept** in the cache even after
+  they leave the pool (`pruneBlobs` keepSet).
+- The favicon cache key is the **url** — changing a url/icon on edit must clear
+  `faviconCache`, `iconLoading`, and `persistedIcons` for the old url (and the
+  new one when a picked icon differs) or stale icons persist.
+- The bookmarks favicon `glisters-icons` cache is **shared** with the grid —
+  same map, same key; don't diverge them.
+- Modal Esc only closes the modal while `mode === 'modal'`; the grid's keystrobe
+  handler early-returns while `mode` is modal/bar.

@@ -1,0 +1,293 @@
+/* ---------------------------------------------------------------------------
+   GLISTERS — bookmarks sidebar
+   Left-edge slide-over with a nested bookmark tree. Shares the theme tokens
+   from main.css (:root). Self-contained so it can't clash with other work.
+--------------------------------------------------------------------------- */
+
+/* ---- left-edge toggle button ---- */
+
+.icon-btn.bk-fab {
+  display: none; /* hotkey b — no on-screen button */
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 32;
+  background: rgba(10, 10, 10, 0.5);
+  backdrop-filter: blur(10px);
+  transition: opacity 0.2s, border-color 0.2s, background-color 0.2s;
+}
+
+/* ---- the sidebar ---- */
+
+.bk {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--bk-width, 360px);
+  max-width: 88vw;
+  z-index: 44;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border-left: 1px solid var(--line);
+  transform: translateX(100%);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  will-change: transform;
+  /* fast slide-in: quick start, gentle landing, no overshoot past the edge */
+  transition: transform 0.16s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.bk.open { transform: none; }
+
+/* hide the launcher once the sidebar is open (sibling order: fab, aside) */
+.bk.open ~ .bk-fab { opacity: 0; pointer-events: none; }
+
+.bk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.bk-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.bk-head-actions { display: flex; align-items: center; gap: 8px; }
+
+.bk-chrome-btn.syncing svg { animation: bkSpin 0.8s linear infinite; }
+@keyframes bkSpin { to { transform: rotate(360deg); } }
+
+.bk-btn {
+  background: var(--page);
+  border: 1px solid var(--line-soft);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background-color 0.2s;
+}
+.bk-btn:hover { border-color: var(--line-softer); color: var(--fg); background: var(--surface); }
+.bk-btn:active { transform: translateY(1px); }
+
+/* ---- tree ---- */
+
+.bk-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 6px 12px 14px;
+  outline: none;
+}
+.bk-tree.drop-root { box-shadow: inset 0 0 0 1px var(--line); }
+
+.bk-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.bk-row:hover { background: var(--surface); }
+.bk-row.focused { background: var(--surface); border-color: var(--line-softer); }
+.bk-row.focused .bk-name { color: var(--fg); }
+.bk-row.armed .bk-name { color: var(--danger); }
+.bk-row.armed { border-color: var(--danger); }
+.bk-row.dragging { opacity: 0.4; }
+.bk-row.drop-before { border-top-color: var(--line); }
+.bk-row.drop-into { background: rgba(255, 255, 255, 0.08); border-color: var(--line); }
+
+.bk-twist {
+  width: 14px;
+  flex: 0 0 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+/* ---- drill-down navigation (back + breadcrumbs) ---- */
+
+.bk-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px 9px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.bk-nav-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--page);
+  border: 1px solid var(--line-soft);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background-color 0.15s, opacity 0.15s;
+}
+.bk-nav-btn:hover { border-color: var(--line-softer); color: #fff; background: var(--surface); }
+.bk-nav-btn.disabled { opacity: 0.35; pointer-events: none; }
+
+.bk-crumbs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+.bk-crumb {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  padding: 3px 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s;
+}
+.bk-crumb:hover { color: var(--fg); background: var(--surface); }
+.bk-crumb.current { color: var(--fg); cursor: default; }
+.bk-crumb-sep {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  user-select: none;
+}
+
+.bk-icon {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.bk-icon svg, .bk-icon img { width: 18px; height: 18px; grid-area: 1 / 1; pointer-events: none; user-select: none; }
+.bk-icon img { object-fit: contain; }
+.bk-letter {
+  grid-area: 1 / 1;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  pointer-events: none;
+}
+.bk-folder { color: var(--muted); }
+
+.bk-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  color: var(--fg-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* hover action buttons (mirror of the grid tiles) */
+.bk-ctx {
+  display: none;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.bk-row:hover .bk-ctx, .bk-row.focused .bk-ctx { display: flex; }
+
+.bk-ctx-btn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--page);
+  border: 1px solid var(--line-soft);
+  color: var(--fg);
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+.bk-ctx-btn svg { width: 12px; height: 12px; pointer-events: none; }
+.bk-ctx-btn:hover { border-color: var(--line); color: #fff; }
+.bk-ctx-del { color: var(--muted); }
+.bk-ctx-del:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ---- inline editor (add / edit) ---- */
+
+.bk-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 4px 2px 8px;
+  padding: 12px;
+  background: var(--page);
+  border: 1px solid var(--line-soft);
+}
+.bk-field { display: flex; flex-direction: column; gap: 4px; }
+.bk-field > span {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.bk-field input {
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  color: var(--fg);
+  font-size: 14px;
+  font-family: inherit;
+  padding: 9px 11px;
+}
+.bk-field input:focus { outline: none; border-color: var(--line); box-shadow: 0 0 0 1px var(--line); }
+.bk-field input.err { border-color: var(--danger); }
+.bk-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* ---- empty + footer ---- */
+
+.bk-empty {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 20px;
+  text-align: center;
+}
+.bk-empty .bk-empty-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.bk-empty .bk-empty-sub { font-size: 13px; color: var(--muted); }
+
