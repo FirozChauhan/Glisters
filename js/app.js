@@ -235,7 +235,8 @@
       updatedAt: typeof o.updatedAt === 'number' ? o.updatedAt : 0,
       sites: sites,
       settings: s,
-      /* bookmarks slice is validated by js/bookmarks.js; null = keep sidebar-local */
+      /* a stale bookmarks slice from an old save is tolerated but never
+         written again — the sidebar edits chrome.bookmarks directly now */
       bookmarks: (o.bookmarks && typeof o.bookmarks === 'object') ? o.bookmarks : null,
       /* wallpaper slice is validated by js/walls.js */
       walls: (o.walls && typeof o.walls === 'object') ? o.walls : null
@@ -244,8 +245,11 @@
 
   function doc() {
     var d = { version: SEED_VERSION, updatedAt: state.updatedAt, sites: state.sites, settings: state.settings };
-    /* the bookmarks sidebar + wallpaper feature contribute their slices (guarded) */
-    if (window.BOOKMARKS) d.bookmarks = window.BOOKMARKS.forDoc();
+    /* the wallpaper feature contributes its slice (guarded). The bookmarks
+       sidebar is a direct chrome.bookmarks editor now — it no longer has a
+       slice (forDoc() returns null), so the save doc carries nothing for it. */
+    var bm = window.BOOKMARKS ? window.BOOKMARKS.forDoc() : null;
+    if (bm) d.bookmarks = bm;
     if (window.WALLS) d.walls = window.WALLS.forDoc();
     return d;
   }
@@ -2184,8 +2188,9 @@
     syncStart();
   }
 
-  /* hand the bookmarks sidebar our commit + its slice of the save file so
-     bookmark edits hit the same doc and cloud sync as the grid. */
+  /* hand the bookmarks sidebar our commit + its slice — both are inert now
+     (the sidebar edits chrome.bookmarks directly and stores nothing), kept
+     so the guarded hooks stay valid. */
   if (window.BOOKMARKS) {
     window.BOOKMARKS.bind(commit);
     window.BOOKMARKS.restore(state.bookmarks);

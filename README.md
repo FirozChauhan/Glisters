@@ -15,7 +15,7 @@
 
 - **Shortcut grid** — a 6×5 grid that paginates into more pages (`tab`, `shift+tab`, wheel), with drag-reorder and hi-res favicons that resolve favicon → apple-touch-icon → Google s2 → DDG, falling back to a letter monogram
 - **Vim control** — `h j k l` to move, `enter`/`o` to open, `/` command bar, `a e d` add/edit/delete — everything, no mouse required
-- **Bookmarks sidebar** — a right-edge panel that mirrors Chrome's real bookmarks and edits them write-through (add, delete, move, drag-and-drop, folders, breadcrumbs)
+- **Bookmarks sidebar** — a right-edge panel that edits Chrome's real bookmarks directly (add, delete, move, drag-and-drop, folders, breadcrumbs) — no copy, no local store
 - **Wallpapers** — a rotating 10-shot pool from Wallhaven's monthly toplist, purity/category filters, favourites, and a persistent "safe" wallpaper; 24-hour rotation with offline fallback
 - **Cloud sync** — the whole save file mirrors to a Cloudflare Worker + R2, last-write-wins by timestamp (a stale copy can never clobber a newer one)
 - **Settings drawer** — live sliders for grid layout, icon size, gaps, label styling, sidebar/drawer widths, monochrome icons

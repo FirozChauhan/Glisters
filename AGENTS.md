@@ -10,7 +10,7 @@ code. Read this before touching any file.
 
 **Glisters** is a minimal, keyboard-first Chrome extension that replaces the
 new-tab page. It renders a vim-controlled grid of shortcut tiles, a right-edge
-bookmarks sidebar that mirrors (and edits) Chrome's real bookmarks, a left-edge
+bookmarks sidebar that edits Chrome's real bookmarks directly, a left-edge
 settings drawer, an optional wallpaper pool pulled from Wallhaven, and a
 Cloudflare-Worker-backed sync layer so the whole save file mirrors to R2.
 
@@ -119,7 +119,8 @@ drawer, drag-reorder, page flips, and orchestrates the other modules.
   clean names. `DEFAULTS.sites` starts from it, so a fresh/wiped install
   renders the links on first paint with zero fetches (offline-safe).
 - `state` — live in-memory doc (`version`, `updatedAt`, `sites[]`, `settings`,
-  plus `bookmarks`/`walls` slices added by `doc()`).
+  plus the `walls` slice added by `doc()`; bookmarks live in Chrome, not
+  here).
 - `focused` / `armed` (indices), `page`, `mode`
   (`'none' | 'drawer' | 'modal' | 'bar'`), various timers.
 
@@ -127,11 +128,13 @@ drawer, drag-reorder, page flips, and orchestrates the other modules.
 - `readLocal()` → parse `localStorage['glisters']`.
 - `normalize(o)` — the cloud-safety gate. Clamps site name ≤300, url ≤4096,
   only accepts `https?://` icons, validates every numeric setting, defaults
-  booleans, keeps `bookmarks`/`walls` slices only if objects. `restoreFromStorage()`
+  booleans, keeps `bookmarks`/`walls` slices only if objects (the bookmarks
+  slice is tolerated from old saves but never written again). `restoreFromStorage()`
   reads the durable `chrome.storage.local` copy if localStorage misses.
 - `persistLocal()` writes BOTH localStorage and `chrome.storage.local`.
-- `doc()` returns the full saveable doc, including `window.BOOKMARKS.forDoc()`
-  and `window.WALLS.forDoc()` slices.
+- `doc()` returns the full saveable doc — the `walls` slice from
+  `window.WALLS.forDoc()`, and bookmarks only if a module still supplies one
+  (it doesn't: `window.BOOKMARKS.forDoc()` is `null`).
 - `commit(opts)` — stamps `updatedAt`, re-renders (unless `noRender`),
   persists, and schedules a cloud push (unless `noCloud`).
 
@@ -279,33 +282,32 @@ urls; `isBuiltin`), reload button (`different:true` — drops current pool first
 become the pool · `space` single = save current as safe, double-space (within
 350ms window) = apply safe.
 
-### 3.8 `js/bookmarks.js` (~1403 lines) — bookmarks sidebar
+### 3.8 `js/bookmarks.js` (~966 lines) — bookmarks sidebar
 Sinks to `window.BOOKMARKS = { bind, forDoc, restore, refreshFromChrome }`.
 
-**Data model**: flat arrays `STORE.folders` / `STORE.items` with `{id,
-chromeId?, name, url?, parent, index}`; `parent === null` means root. `v:1`.
-Persists under `localStorage['glisters-bk']` + chrome.storage + app doc slice.
-`localStorage['glisters-bk-ui']` holds only the open state.
+**Model**: the sidebar is a **direct editor for Chrome's real bookmarks** —
+it renders `chrome.bookmarks.getTree()` live and refreshes on every chrome
+bookmark event (`onCreated`/`onRemoved`/`onChanged`/`onMoved`/
+`onChildrenReordered`/`onImportEnded`/`onImportBegan`), so changes made
+anywhere (Chrome UI, another device, this sidebar) appear instantly. There is
+**no local mirror, no `glisters-bk` storage key, and no slice in the app
+save doc** — `bind`/`forDoc`/`restore` are inert stubs kept only so app.js's
+guarded calls stay valid. `localStorage['glisters-bk-ui']` holds only the
+panel open state.
 
-**Tombstones** (`STORE.deletedChromeIds`): monotonic; once a chrome node is
-deleted locally it must never be re-imported. Unioned on every adopt, never
-replaced; `purgeTombstoned()` heals zombie imports from pre-tombstone boots.
-`adopt()` keeps the authoritative local store when it is newer
-(`STORE.updatedAt > incomingAt`) but still unions incoming deletions; boot
-order guarantees the durable store is loaded before the first Chrome merge.
+Home view = the bookmarks bar ('1'); "Other bookmarks"/"Mobile bookmarks"
+are trailing folder rows (large index sorts them last). `normalizeTree()`
+walks the chrome tree into flat `TREE.folders` / `TREE.items` arrays with
+`{id: chromeId, name, url?, parent, index}`; `parent === null` means home.
 
-**Chrome integration** (requires `bookmarks` permission; degrades gracefully):
-- `mergeChromeTree()` — one-way mirror import: `chrome.bookmarks.getTree()`,
-  upserts links by chromeId or name-match; hand-made nodes are never touched;
-  Chrome-side deletions do NOT remove sidebar nodes; tombstoned nodes skipped.
-  Auto-runs after boot and every restore, on demand via the header refresh
-  button (`refreshFromChrome`).
-- **Write-through**: add/edit/delete/move mirror into `chrome.bookmarks`
-  (create/update/remove/removeTree/move). Local mirror is optimistic,
-  chromeIds backfilled from API results. `materializeNode`/
-  `materializeParentChain` push local-only nodes (and folders' children)
-  into Chrome on demand. `chromeParentId` falls back through Other bookmarks
-  id '2' / Mobile '3' if the bar ('1') was tombstoned.
+**Write-through (direct)**: add → `chrome.bookmarks.create`, edit →
+`chrome.bookmarks.update`, delete → `chrome.bookmarks.remove`/`removeTree`,
+move → `chrome.bookmarks.move` — all with the real chrome ids, no backfill.
+Home maps to the bar via `homeIdOf()`. After the API callback the tree is
+re-read (`refresh()`), and the freshly created/edited node is focused only
+after the fresh tree lands (render() falls back to the first row while the
+new id is still missing). Requires the `bookmarks` permission; without it
+the panel shows nothing but degrades gracefully.
 
 **Sidebar UI**: `b`/`B` toggles (capture-phase handler; `stopPropagation` so
 the grid never sees consumed keys). Drill-down folders; back (`h`/`←`) lands
@@ -313,7 +315,7 @@ focus on the folder you left; breadcrumbs (`home / folder / …`). Keys: `j k`
 move · `enter`/`o`/`l`/`→` open · `a` add link · `A` add folder · `e`/`E` edit
 · `d`/`D` delete (arm+confirm) · `g`/`G` first/last · `esc`/`b` close ·
 `tab` consumed (so grid doesn't paginate). Rows are `draggable` (HTML5 DnD):
-drop-into folders / before siblings / onto root, mirrored to Chrome via
+drop-into folders / before siblings / onto root, moved directly in Chrome via
 `moveNode`. Inline editor for add/edit. Links open in a **background** tab
 (`chrome.tabs.create {active:false}`), never navigating the page itself;
 synthetic-click fallback sets `ignoreOutsideClick` so the outside-click close
@@ -427,8 +429,9 @@ stored one (409). The client then pulls and adopts the newer doc. This is the
 3. `chrome.storage.local` — the durable mirror (survives reloads and local
    storage eviction). Each module keeps its own key(s):  - `glisters` (app doc), `glisters-previous` (pre-adoption stash, see §7),
   - `glisters-icons` (shared favicon winner map),
-  - `glisters-walls` (wallpaper doc), `glisters-bk` (sidebar doc),
-    `glisters-bk-ui` (panel open state).
+  - `glisters-walls` (wallpaper doc), `glisters-bk-ui` (sidebar panel open
+    state only — the sidebar itself stores nothing; it edits Chrome's
+    bookmarks directly).
 4. Cloud (R2 via Worker) — mirror + multi-device; only `Glisters/save.json`,
    plus the automatic previous-save copies `save.prev1/prev2.json` kept by
    the worker before every overwrite (recoverable via `GET /backup`).
@@ -468,7 +471,8 @@ grid.
 3. If `needSeed`: try `chrome.storage.local` restore → else `links.txt` → else
    empty. Marks `seededFromLinks`.
 4. `syncStart()`: reconcile cloud (see §4/§5 rules).
-5. `BOOKMARKS.bind(commit)` + `restore(state.bookmarks)`; same for WALLS.
+5. `BOOKMARKS.bind(commit)` + `restore(state.bookmarks)` (both inert — the
+   sidebar edits Chrome directly now); `WALLS.bind` + `restore` do real work.
 Note the page never steals focus (address bar keeps it) — keys only live after
 the user clicks/tabs in.
 

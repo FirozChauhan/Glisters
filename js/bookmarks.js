@@ -1,40 +1,42 @@
 /* ---------------------------------------------------------------------------
    GLISTERS — bookmarks sidebar
-   A full bookmark manager on the left edge of the new tab page.
+   A direct editor for Chrome's real bookmarks on the left edge of the new
+   tab page.
 
-   - drill-down folders: opening a folder fills the panel, back (h / ←) and
-     breadcrumbs return home; drag & drop reorder / move
+   - the sidebar is a LIVE view of chrome.bookmarks: it renders getTree()
+     and refreshes on every chrome bookmark event (onCreated/onRemoved/
+     onChanged/onMoved/…), so changes made anywhere (Chrome UI, sync,
+     another device) appear instantly
+   - every edit is written STRAIGHT through to chrome.bookmarks — add, edit,
+     delete and move call the real API. Nothing is mirrored, nothing is
+     stored locally, nothing rides the cloud save doc. "Bookmarks bar"
+     contents fill the home view; "Other bookmarks" and "Mobile bookmarks"
+     are reachable as the trailing folders
    - keyboard-first:  b toggle · j/k move · enter or l open folder/link ·
      h or ← back · a add link · A add folder · e edit · d delete (arm) ·
      g/G first/last · esc close
-   - import/export Netscape bookmark HTML (Chrome/Firefox compatible)
-   - persists to its own localStorage + chrome.storage.local key, AND rides
-     inside the shared save file (app.js doc()) so it syncs to Cloudflare R2
-
-   Design note: this file is deliberately self-contained — it talks to app.js
-   only through three guarded hooks (window.BOOKMARKS.bind / forDoc / restore),
-   so it can't collide with other work on the grid.
+   - self-contained: talks to app.js only through guarded hooks
+     (window.BOOKMARKS.bind / forDoc / restore — now inert, since the
+     sidebar no longer contributes to the save doc)
 --------------------------------------------------------------------------- */
 
 (function () {
   'use strict';
 
-  var LS_KEY = 'glisters-bk';       /* sidebar data  */
   var UI_KEY = 'glisters-bk-ui';    /* panel open state (local only) */
 
   /* ------------------------------------------------------------------ state */
 
-  var STORE = {
-    v: 1,
-    updatedAt: 0,
-    folders: [],   /* { id, name, parent, index } */
-    items: [],     /* { id, name, url, parent, index } */
-    deletedChromeIds: []  /* chrome bookmarks the user deleted locally — never re-import */
-  };
+  /* the normalized chrome bookmark tree: every folder/link node is
+     { id: chromeId, name, url?, parent, index }. Home (parent null) is the
+     bookmarks bar; the "Other bookmarks" / "Mobile bookmarks" roots are
+     folder nodes with parent null and a large index so they trail the bar
+     contents at home. */
+  var TREE = { folders: [], items: [] };
 
   var ui = {
     open: false,
-    folder: null,           /* currently open folder id; null = home (root) */
+    folder: null,           /* currently open folder chromeId; null = home */
     focusedId: null,
     armedId: null,
     armTimer: null,
@@ -42,7 +44,7 @@
     visible: []     /* cached flat list for the current view from last render() */
   };
 
-  var appCommit = null;     /* app.js commit() — writes the shared doc + cloud */
+  var appCommit = null;     /* kept for API-shape compat — no longer used */
   var faviconCache = Object.create(null);
   var ignoreOutsideClick = false; /* set while the link-open fallback synthesizes a click */
 
@@ -55,7 +57,6 @@
     if (text != null) n.textContent = text;
     return n;
   }
-  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
   function isTyping(t) {
     return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
       t.tagName === 'SELECT' || t.isContentEditable);
@@ -76,156 +77,94 @@
 
   if (!root || !tree) return; /* markup missing — never break the page */
 
-  /* ------------------------------------------------------- persistence */
-
-  function dataDoc() {
-    return {
-      v: STORE.v,
-      updatedAt: STORE.updatedAt,
-      folders: STORE.folders,
-      items: STORE.items,
-      deletedChromeIds: STORE.deletedChromeIds
-    };
-  }
-  function readLS(key) {
-    try {
-      var raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) { return null; }
-  }
-  function persistData() {
-    var d = dataDoc();
-    try { localStorage.setItem(LS_KEY, JSON.stringify(d)); } catch (e) { /* quota */ }
-    if (window.chrome && chrome.storage && chrome.storage.local) {
-      var o = {};
-      o[LS_KEY] = d;
-      try { chrome.storage.local.set(o); } catch (e) { /* noop */ }
-    }
-  }
   function saveUI() {
     try { localStorage.setItem(UI_KEY, JSON.stringify({ open: ui.open })); } catch (e) {}
   }
-  function touch() {
-    STORE.updatedAt = Date.now();
-    persistData();
-    saveUI();
-    if (appCommit) appCommit();
+
+  /* ------------------------------------------------------- chrome access */
+
+  function chromeBk() {
+    return (typeof chrome !== 'undefined' && chrome.bookmarks) ? chrome.bookmarks : null;
+  }
+  /* home (parent null) maps to the bookmarks bar for the API */
+  function homeIdOf(p) { return p || '1'; }
+  function homeOf(p) { return p === '1' ? null : p; }
+
+  function hostOf(url) {
+    try { return new URL(url).hostname.replace(/^www\\./, ''); } catch (e) { return ''; }
   }
 
-  /* sanitize a node so a corrupt cloud copy can't crash the renderer */
-  function cleanFolder(f, i) {
-    return {
-      id: f && f.id ? String(f.id) : uid(),
-      chromeId: f && f.chromeId ? String(f.chromeId) : undefined,
-      name: String((f && f.name) != null ? f.name : ''),
-      parent: f && f.parent != null ? String(f.parent) : null,
-      index: f && typeof f.index === 'number' ? f.index : i
-    };
-  }
-  function cleanItem(it, i) {
-    return {
-      id: it && it.id ? String(it.id) : uid(),
-      chromeId: it && it.chromeId ? String(it.chromeId) : undefined,
-      name: String((it && it.name) != null ? it.name : ''),
-      url: String((it && it.url) != null ? it.url : ''),
-      parent: it && it.parent != null ? String(it.parent) : null,
-      index: it && typeof it.index === 'number' ? it.index : i
-    };
-  }
-  function setData(bm) {
-    STORE.v = bm && bm.v || 1;
-    STORE.updatedAt = bm && typeof bm.updatedAt === 'number' ? bm.updatedAt : 0;
-    /* tombstones are monotonic: once a chrome node is deleted here it must
-       stay deleted forever, no matter which copy of the doc wins. Union the
-       incoming set with what we already have — a stale/empty mirror can
-       never resurrect something that was deleted. */
-    var inc = (bm && Array.isArray(bm.deletedChromeIds) ? bm.deletedChromeIds : [])
-      .filter(function (x) { return x != null && String(x); })
-      .map(function (x) { return String(x); });
-    inc.forEach(function (id) {
-      if (STORE.deletedChromeIds.indexOf(id) === -1) STORE.deletedChromeIds.push(id);
-    });
-    STORE.folders = (bm && Array.isArray(bm.folders) ? bm.folders : [])
-      .filter(function (f) { return f && typeof f === 'object'; })
-      .map(cleanFolder);
-    STORE.items = (bm && Array.isArray(bm.items) ? bm.items : [])
-      .filter(function (it) { return it && typeof it === 'object' && it.url; })
-      .map(cleanItem);
-  }
-  /* drop any nodes whose chrome id is tombstoned. Heals zombie imports a
-     buggy/older boot persisted before the durable tombstones were known —
-     deletions made here must stick forever, no matter which copy won. */
-  function purgeTombstoned() {
-    var doomed = {};
-    STORE.folders.forEach(function (f) {
-      if (f.chromeId && STORE.deletedChromeIds.indexOf(f.chromeId) !== -1) {
-        collectIds(f.id).forEach(function (id) { doomed[id] = true; });
-      }
-    });
-    STORE.items.forEach(function (it) {
-      if (it.chromeId && STORE.deletedChromeIds.indexOf(it.chromeId) !== -1) doomed[it.id] = true;
-    });
-    if (!Object.keys(doomed).length) return false;
-    STORE.folders = STORE.folders.filter(function (f) { return !doomed[f.id]; });
-    STORE.items = STORE.items.filter(function (it) { return !doomed[it.id]; });
-    return true;
-  }
-  function adopt(bm) {
-    /* the sidebar's own persisted store is authoritative when it is newer
-       than the incoming mirror (the shared app doc can lag behind — e.g. a
-       commit that ran before this page's edits flushed, or a stale cloud
-       copy). Never let a stale/empty slice wipe out local deletions: keep
-       the local state and union the incoming tombstones so nothing deleted
-       here can ever be resurrected by an older mirror. */
-    var incomingAt = bm && typeof bm.updatedAt === 'number' ? bm.updatedAt : 0;
-    var changed = false;
-    if (STORE.updatedAt > incomingAt) {
-      /* local copy is newer — keep it, but never lose the incoming deletions */
-      var before = STORE.deletedChromeIds.length;
-      if (bm && Array.isArray(bm.deletedChromeIds)) {
-        bm.deletedChromeIds.forEach(function (id) {
-          id = String(id);
-          if (STORE.deletedChromeIds.indexOf(id) === -1) STORE.deletedChromeIds.push(id);
+  /* pull the real chrome tree and normalize it for the renderer */
+  function refresh() {
+    return new Promise(function (resolve) {
+      var bk = chromeBk();
+      if (!bk || !bk.getTree) { resolve(false); return; }
+      try {
+        bk.getTree(function (tree) {
+          try {
+            normalizeTree(tree);
+          } catch (e) { /* keep previous tree */ }
+          /* the folder being viewed may have been deleted in chrome */
+          if (ui.folder && !findFolder(ui.folder)) ui.folder = null;
+          render();
+          resolve(true);
         });
-      }
-      if (STORE.deletedChromeIds.length !== before) changed = true;
-    } else {
-      setData(bm);
-      changed = true;
-    }
-    /* once the tombstones are known, remove any zombie nodes they cover */
-    if (purgeTombstoned()) changed = true;
-    if (changed) {
-      persistData();
-      render();
-    }
-    /* after adopting (boot restore / cloud pull) re-pull chrome bookmarks so
-       they always reconcile with the doc, whatever order boot settled in */
-    mergeChromeTree();
+      } catch (e) { resolve(false); }
+    });
   }
 
-  /* --- public API used by app.js (all guarded there) --- */
+  function normalizeTree(tree) {
+    var folders = [], items = [];
+    var rootNode = tree && tree[0];
+    (function walk(cn, parent) {
+      var kids = cn.children || [];
+      for (var i = 0; i < kids.length; i++) {
+        var ch = kids[i];
+        if (!ch || !ch.id) continue;
+        /* the bar's children ARE home; the other permanent roots become
+           trailing folder rows at home (large index so they sort last) */
+        var p = parent === '1' ? null : parent;
+        if (ch.url) {
+          items.push({ id: ch.id, name: ch.title || hostOf(ch.url) || ch.url, url: ch.url, parent: p, index: i });
+        } else {
+          if (ch.id === '1') { walk(ch, '1'); continue; } /* bar itself is not a row */
+          var idx = parent == null ? 100000 + i : i;
+          folders.push({ id: ch.id, name: ch.title || 'folder', parent: p, index: idx });
+          walk(ch, ch.id);
+        }
+      }
+    })(rootNode, null);
+    TREE.folders = folders;
+    TREE.items = items;
+  }
 
-  window.BOOKMARKS = {
-    bind: function (cb) { appCommit = cb; },
-    forDoc: function () { return dataDoc(); },
-    restore: function (bm) {
-      if (!bm || typeof bm !== 'object' || !Array.isArray(bm.folders) || !Array.isArray(bm.items)) return;
-      adopt(bm);
-    },
-    /* also exposed so tests / other code can trigger a pull */
-    refreshFromChrome: function () { return mergeChromeTree(); }
-  };
+  /* live: any chrome bookmark change re-renders the sidebar */
+  var refreshTimer = 0;
+  function armRefresh() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(refresh, 150);
+  }
+  var BK_EVENTS = ['onCreated', 'onRemoved', 'onChanged', 'onMoved',
+    'onChildrenReordered', 'onImportEnded', 'onImportBegan'];
+  function bindChromeEvents() {
+    var bk = chromeBk();
+    if (!bk) return;
+    for (var i = 0; i < BK_EVENTS.length; i++) {
+      if (bk[BK_EVENTS[i]] && bk[BK_EVENTS[i]].addListener) {
+        try { bk[BK_EVENTS[i]].addListener(armRefresh); } catch (e) { /* noop */ }
+      }
+    }
+  }
 
   /* ------------------------------------------------------- tree helpers */
 
   function parentKey(p) { return p == null ? '__root__' : p; }
   function findFolder(id) {
-    for (var i = 0; i < STORE.folders.length; i++) if (STORE.folders[i].id === id) return STORE.folders[i];
+    for (var i = 0; i < TREE.folders.length; i++) if (TREE.folders[i].id === id) return TREE.folders[i];
     return null;
   }
   function findItem(id) {
-    for (var i = 0; i < STORE.items.length; i++) if (STORE.items[i].id === id) return STORE.items[i];
+    for (var i = 0; i < TREE.items.length; i++) if (TREE.items[i].id === id) return TREE.items[i];
     return null;
   }
   function findNode(id) {
@@ -238,28 +177,24 @@
   function childrenOf(parent) {
     var p = parentKey(parent);
     var out = [];
-    for (var i = 0; i < STORE.folders.length; i++) {
-      if (parentKey(STORE.folders[i].parent) === p) out.push({ type: 'folder', node: STORE.folders[i] });
+    for (var i = 0; i < TREE.folders.length; i++) {
+      if (parentKey(TREE.folders[i].parent) === p) out.push({ type: 'folder', node: TREE.folders[i] });
     }
-    for (var j = 0; j < STORE.items.length; j++) {
-      if (parentKey(STORE.items[j].parent) === p) out.push({ type: 'link', node: STORE.items[j] });
+    for (var j = 0; j < TREE.items.length; j++) {
+      if (parentKey(TREE.items[j].parent) === p) out.push({ type: 'link', node: TREE.items[j] });
     }
     out.sort(function (a, b) { return a.node.index - b.node.index; });
     return out;
   }
-  function reindex(parent) {
-    var kids = childrenOf(parent);
-    for (var i = 0; i < kids.length; i++) kids[i].node.index = i;
-  }
-  function folderPath(parent) {
-    var names = [], cur = parent, guard = 0;
+  function folderPathIds(folderId) {
+    var ids = [], cur = folderId, guard = 0;
     while (cur && guard++ < 50) {
       var f = findFolder(cur);
       if (!f) break;
-      names.unshift(f.name);
+      ids.unshift(f.id);
       cur = f.parent;
     }
-    return names;
+    return ids;
   }
   function isDescendant(maybeChild, ancestor) {
     var cur = maybeChild, guard = 0;
@@ -269,14 +204,6 @@
       cur = n ? n.node.parent : null;
     }
     return false;
-  }
-  function collectIds(folderId) {
-    var ids = [folderId];
-    childrenOf(folderId).forEach(function (c) {
-      if (c.type === 'folder') ids = ids.concat(collectIds(c.node.id));
-      else ids.push(c.node.id);
-    });
-    return ids;
   }
 
   function visibleNodes() {
@@ -654,7 +581,7 @@
     var u = String(url).trim();
     if (!u) return '';
     /* only web / mail links are ever opened (blocks javascript:/data:/file:…
-       from a tampered save file or malicious bookmark title) */
+       from a malicious bookmark title or tampered source) */
     if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) return 'https://' + u;
     var scheme = u.slice(0, u.indexOf(':')).toLowerCase();
     if (scheme === 'http' || scheme === 'https' || scheme === 'mailto') return u;
@@ -688,17 +615,8 @@
 
   /* ---- drill-down navigation ---- */
 
-  function folderPathIds(folderId) {
-    var ids = [], cur = folderId, guard = 0;
-    while (cur && guard++ < 50) {
-      var f = findFolder(cur);
-      if (!f) break;
-      ids.unshift(f.id);
-      cur = f.parent;
-    }
-    return ids;
-  }
   function openFolder(id) {
+    if (id === '1') id = null; /* the bar IS home */
     if (id != null && !findFolder(id)) return;
     ui.folder = id;
     ui.focusedId = null;
@@ -708,7 +626,7 @@
     if (ui.folder == null) return;
     var prev = ui.folder;
     var f = findFolder(prev);
-    ui.folder = f ? f.parent : null;
+    ui.folder = f ? homeOf(f.parent) : null;
     ui.focusedId = prev; /* land focus on the folder we came out of */
     render();
   }
@@ -734,92 +652,6 @@
   }
   function nextIndex(parent) { return childrenOf(parent).length; }
 
-  /* ------------------------------------------------- chrome write-through
-     The sidebar is a real editor for Chrome's bookmarks: every add / edit /
-     delete / move is mirrored straight into chrome.bookmarks, so changes
-     persist in Chrome itself (and survive the auto-merge — deleting a folder
-     here really deletes it in Chrome). The local mirror stays optimistic:
-     it updates instantly and the real chromeId is backfilled from the API
-     result. Local-only nodes (created earlier, or while Chrome is
-     unreachable) are materialized into Chrome on demand. Without the
-     "bookmarks" permission everything degrades to the old local-only
-     behavior. */
-
-  function chromeBk() {
-    return (typeof chrome !== 'undefined' && chrome.bookmarks) ? chrome.bookmarks : null;
-  }
-  /* Chrome parent id for a sidebar parent: root → the bookmarks bar ('1');
-     a folder → its own chromeId (null while it's still local-only).
-     Chrome's bar can be deleted in the sidebar (tombstoned) — then new
-     root-level nodes must go to the next permanent folder (Other bookmarks
-     '2', Mobile '3'), or they'd land in the deleted bar and silently never
-     appear in the sidebar again. */
-  function chromeParentId(localParent) {
-    if (localParent == null) {
-      if (STORE.deletedChromeIds.indexOf('1') === -1) return '1';
-      if (STORE.deletedChromeIds.indexOf('2') === -1) return '2';
-      if (STORE.deletedChromeIds.indexOf('3') === -1) return '3';
-      return '1';
-    }
-    var f = findFolder(localParent);
-    return f && f.chromeId ? f.chromeId : null;
-  }
-  /* push one local-only node into Chrome, backfilling its chromeId; folders
-     bring their children along. cb(chromeId) when done. */
-  function materializeNode(id, cb) {
-    var bk = chromeBk();
-    var n = findNode(id);
-    if (!bk || !n) { cb && cb(null); return; }
-    var node = n.node;
-    if (node.chromeId) { cb && cb(node.chromeId); return; }
-    var cParent = chromeParentId(node.parent);
-    if (!cParent) { cb && cb(null); return; }
-    bk.create({
-      parentId: cParent,
-      title: node.name,
-      url: n.type === 'link' ? node.url : undefined,
-      index: node.index
-    }, function (created) {
-      if (!created || !created.id) { cb && cb(null); return; }
-      node.chromeId = created.id;
-      touch(); /* persist the backfill */
-      if (n.type !== 'folder') { cb && cb(created.id); return; }
-      var kids = childrenOf(node.id);
-      var left = kids.length;
-      if (!left) { cb && cb(created.id); return; }
-      var guard = false;
-      kids.forEach(function (k) {
-        materializeNode(k.node.id, function () {
-          if (guard) return;
-          if (--left <= 0) { guard = true; cb && cb(created.id); }
-        });
-      });
-    });
-  }
-  /* the node's parent chain may itself be local-only — materialize upward
-     first so a chrome parent id exists, then materialize the node. */
-  function materializeParentChain(id, cb) {
-    var n = findNode(id);
-    if (!n) { cb(); return; }
-    var p = n.node.parent;
-    if (p == null) { cb(); return; }
-    var pf = findFolder(p);
-    if (!pf || pf.chromeId) { cb(); return; }
-    materializeParentChain(pf.id, function () {
-      materializeNode(pf.id, function () { cb(); });
-    });
-  }
-  /* ensure a node exists in chrome (materializing its chain), then run op
-     with its chromeId (null if it can't be materialized). */
-  function withChromeNode(id, op) {
-    var n = findNode(id);
-    if (!n) { op(null); return; }
-    if (n.node.chromeId) { op(n.node.chromeId); return; }
-    materializeParentChain(id, function () {
-      materializeNode(id, function (cid) { op(cid); });
-    });
-  }
-
   function openEditor(parent, type, node) {
     ui.editor = { parent: parent, type: type, node: node || null };
     render();
@@ -830,9 +662,15 @@
     ui.editor = null;
     render();
   }
+  /* every add / edit goes STRAIGHT to chrome.bookmarks — there is no local
+     store, so a saved change IS a chrome change. The tree is re-read after
+     the API callback (and the chrome event listeners re-render on their
+     own). */
   function saveEditor(form) {
     var ed = ui.editor;
     if (!ed) return;
+    var bk = chromeBk();
+    if (!bk) { cancelEditor(); return; }
     var nameInp = form.querySelector('.bk-en');
     var urlInp = form.querySelector('.bk-ur');
     var name = nameInp.value.trim();
@@ -846,53 +684,31 @@
     }
     if (!ok) return;
 
-    var id, isEdit = !!ed.node;
-    if (isEdit) {
-      id = ed.node.id;
-      ed.node.name = name;
-      if (ed.type === 'link') {
-        if (ed.node.url !== url) delete faviconCache[ed.node.url];
-        ed.node.url = url;
-      }
-    } else {
-      id = uid();
-      if (ed.type === 'link') {
-        STORE.items.push({ id: id, name: name, url: url, parent: ed.parent, index: nextIndex(ed.parent) });
-      } else {
-        STORE.folders.push({ id: id, name: name, parent: ed.parent, index: nextIndex(ed.parent) });
-      }
-    }
-    ui.editor = null;
-    ui.focusedId = id;
-    /* drill into the folder the node landed in so it's visible */
-    if (ed.parent) ui.folder = ed.parent;
-    saveUI();
-    touch();
-    render();
+    var done = function (created) {
+      /* focus the created/edited node, but only AFTER the fresh tree lands:
+         render() falls back to the first row when the focused id is missing,
+         and the just-created node isn't in the tree until refresh() re-reads
+         it — so set focus on the refresh callback, not before */
+      var focusId = (created && created.id) || (ed.node && ed.node.id) || null;
+      ui.editor = null;
+      if (ed.parent) ui.folder = homeOf(ed.parent);
+      saveUI();
+      render();
+      refresh().then(function () {
+        if (focusId) setFocused(focusId);
+      });
+    };
 
-    /* ---- write through to chrome.bookmarks ---- */
-    var bk = chromeBk();
-    if (!bk) return;
-    var savedNode = findNode(id);
-    if (!savedNode) return;
-    var node = savedNode.node;
-    if (isEdit && node.chromeId) {
-      /* existing chrome bookmark — update it in place */
+    if (ed.node) {
+      /* edit an existing chrome bookmark in place */
       var upd = { title: name };
       if (ed.type === 'link') upd.url = url;
-      try { bk.update(node.chromeId, upd, function () {}); } catch (e) { /* chrome gone */ }
+      try { bk.update(ed.node.id, upd, done); } catch (e) { cancelEditor(); }
     } else {
-      /* fresh add (or a local-only node being edited) — materialize it into
-         chrome so it really lives there (fresh adds are created by
-         materializeNode with the values above) */
-      withChromeNode(id, function (cid) {
-        if (!cid) return;
-        if (isEdit) {
-          var u2 = { title: name };
-          if (ed.type === 'link') u2.url = url;
-          try { bk.update(cid, u2, function () {}); } catch (e) { /* noop */ }
-        }
-      });
+      /* fresh add — created directly in chrome */
+      var o = { parentId: homeIdOf(ed.parent), title: name };
+      if (ed.type === 'link') o.url = url;
+      try { bk.create(o, done); } catch (e) { cancelEditor(); }
     }
   }
 
@@ -911,35 +727,18 @@
     var n = findNode(id);
     if (!n) return;
     var parent = n.node.parent;
-    var ids = n.type === 'folder' ? collectIds(id) : [id];
-    var set = {};
-    ids.forEach(function (x) { set[x] = true; });
-
-    /* remove it from chrome directly — folders take the whole subtree with
-       removeTree, so a sidebar deletion is a real deletion */
     var bk = chromeBk();
-    if (bk && n.node.chromeId) {
-      try {
-        if (n.type === 'folder') bk.removeTree(n.node.chromeId, function () {});
-        else bk.remove(n.node.chromeId, function () {});
-      } catch (e) { /* chrome gone */ }
-    }
-
-    /* tombstone the chrome ids anyway — a safety net for the async window
-       (a merge that already read the tree before the removal landed) */
-    STORE.folders.concat(STORE.items).forEach(function (node) {
-      if (set[node.id] && node.chromeId &&
-          STORE.deletedChromeIds.indexOf(node.chromeId) === -1) {
-        STORE.deletedChromeIds.push(node.chromeId);
-      }
-    });
-    STORE.folders = STORE.folders.filter(function (f) { return !set[f.id]; });
-    STORE.items = STORE.items.filter(function (it) { return !set[it.id]; });
-    reindex(parent);
-    ui.focusedId = parent;
-    disarm();
-    touch();
-    render();
+    if (!bk) return;
+    var done = function () {
+      ui.focusedId = parent;
+      disarm();
+      refresh();
+    };
+    try {
+      /* real deletion in chrome — folders take the whole subtree */
+      if (n.type === 'folder') bk.removeTree(id, done);
+      else bk.remove(id, done);
+    } catch (e) { /* chrome gone */ }
   }
 
   /* ------------------------------------------------------- drag & drop */
@@ -955,38 +754,15 @@
     var n = findNode(id);
     if (!n) return;
     if (n.type === 'folder' && (newParent === id || isDescendant(newParent, id))) return;
-    var oldParent = n.node.parent;
-    removeById(id);
-    n.node.parent = newParent;
-    n.node.index = newIndex; /* normalized by reindex below */
-    if (n.type === 'folder') STORE.folders.push(n.node);
-    else STORE.items.push(n.node);
-    reindex(newParent);
-    if (oldParent !== newParent) reindex(oldParent);
-    ui.focusedId = id;
-    saveUI();
-    touch();
-    render();
-
-    /* ---- mirror the move in chrome.bookmarks ---- */
     var bk = chromeBk();
     if (!bk) return;
-    if (n.node.chromeId) {
-      /* destination may be a local-only folder — materialize it first */
-      materializeParentChain(newParent, function () {
-        if (!n.node.chromeId) return;
-        var cP = chromeParentId(newParent);
-        if (!cP) return;
-        try { bk.move(n.node.chromeId, { parentId: cP, index: newIndex }, function () {}); } catch (e) { /* noop */ }
+    /* direct move in chrome — home maps to the bookmarks bar */
+    try {
+      bk.move(id, { parentId: homeIdOf(newParent), index: newIndex }, function () {
+        ui.focusedId = id;
+        refresh();
       });
-    } else {
-      /* local-only node being dragged — push it into chrome at its new spot */
-      withChromeNode(id, function () {});
-    }
-  }
-  function removeById(id) {
-    STORE.folders = STORE.folders.filter(function (f) { return f.id !== id; });
-    STORE.items = STORE.items.filter(function (it) { return it.id !== id; });
+    } catch (e) { /* chrome gone */ }
   }
 
   tree.addEventListener('dragstart', function (e) {
@@ -1035,204 +811,6 @@
     moveNode(id, dest.parent, dest.index);
   });
 
-  /* ------------------------------------------------------- import / export */
-
-  function parseNetscape(text) {
-    var doc = new DOMParser().parseFromString(text, 'text/html');
-    var rootDl = doc.querySelector('DL');
-    if (!rootDl) throw new Error('no DL');
-    var folders = [], items = [];
-    walk(rootDl, null);
-    function walk(dl, parent) {
-      var dts = dl.children;
-      for (var i = 0; i < dts.length; i++) {
-        var dt = dts[i];
-        if (dt.tagName !== 'DT') continue;
-        var a = dt.querySelector(':scope > A');
-        var h3 = dt.querySelector(':scope > H3');
-        var sub = dt.querySelector(':scope > DL');
-        if (a && a.getAttribute('href')) {
-          items.push({ name: String(a.textContent).trim(), url: a.getAttribute('href'), parent: parent });
-        } else if (h3) {
-          var fid = uid();
-          folders.push({ id: fid, name: String(h3.textContent).trim(), parent: parent, index: 0 });
-          if (sub) walk(sub, fid);
-        }
-      }
-    }
-    return { folders: folders, items: items };
-  }
-  function mergeParsed(parsed, parent) {
-    var idMap = {};
-    parsed.folders.forEach(function (f) {
-      var nid = uid();
-      idMap[f.id] = nid;
-      f.id = nid;
-    });
-    parsed.folders.forEach(function (f) { f.parent = idMap[f.parent] || parent || null; });
-    parsed.items.forEach(function (it) { it.parent = idMap[it.parent] || parent || null; });
-    var groups = {};
-    parsed.folders.concat(parsed.items).forEach(function (n) {
-      var k = parentKey(n.parent);
-      (groups[k] = groups[k] || []).push(n);
-    });
-    Object.keys(groups).forEach(function (k) {
-      var kids = groups[k];
-      var base = childrenOf(k === '__root__' ? null : k).length;
-      kids.forEach(function (n, i) {
-        n.index = base + i;
-        if (n.url) STORE.items.push(n);
-        else STORE.folders.push(n);
-      });
-    });
-  }
-  function importTarget() {
-    var v = visibleFocused();
-    if (!v) return null;
-    return v.type === 'folder' ? v.node.id : v.node.parent;
-  }
-
-  /* import / export UI was removed; the pure parse/build helpers above stay
-     in case the feature is ever re-wired */
-
-  function escHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-  function buildNetscape() {
-    var lines = [];
-    lines.push('<!DOCTYPE NETSCAPE-Bookmark-file-1>');
-    lines.push('<!-- This is an automatically generated file.\n     It will be read and overwritten.\n     DO NOT EDIT! -->');
-    lines.push('<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">');
-    lines.push('<TITLE>Bookmarks</TITLE>');
-    lines.push('<H1>Bookmarks</H1>');
-    lines.push('<DL><p>');
-    buildChildren(null, 1);
-    lines.push('</DL><p>');
-    return lines.join('\n');
-
-    function buildChildren(parent, depth) {
-      var pad = new Array(depth + 1).join('  ');
-      childrenOf(parent).forEach(function (k) {
-        if (k.type === 'folder') {
-          lines.push(pad + '<DT><H3 ADD_DATE="' + stamp() + '">' + escHtml(k.node.name) + '</H3>');
-          lines.push(pad + '<DL><p>');
-          buildChildren(k.node.id, depth + 1);
-          lines.push(pad + '</DL><p>');
-        } else {
-          lines.push(pad + '<DT><A HREF="' + escHtml(k.node.url) + '" ADD_DATE="' + stamp() + '">' + escHtml(k.node.name) + '</A>');
-        }
-      });
-    }
-    function stamp() { return String(Math.floor(Date.now() / 1000)); }
-  }
-
-
-  /* ------------------------------------------------------- chrome bookmarks
-     With the "bookmarks" permission the sidebar mirrors Chrome's real
-     bookmarks. mergeChromeTree() is safe to run any time:
-     - nodes we already imported (matched by chromeId) get title/url updates
-     - folders the user created by hand (no chromeId yet) are matched by name
-       within the same parent so they don't get duplicated   - brand-new chrome nodes are appended into their mapped folder
-   - hand-made nodes are never touched; deletions in chrome do NOT remove
-       sidebar nodes (one-way mirror, so local edits always survive)
-   - nodes the user deletes in the sidebar are tombstoned (deletedChromeIds)
-       so the automatic mirror never brings them back on the next load */
-
-  var chromeMerging = false;
-
-  function hostOf(url) {
-    try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
-  }
-  function findByChromeId(type, chromeId) {
-    var arr = type === 'folder' ? STORE.folders : STORE.items;
-    for (var i = 0; i < arr.length; i++) {
-      if (arr[i].chromeId === chromeId) return arr[i];
-    }
-    return null;
-  }
-  function matchByName(type, parent, name) {
-    var arr = type === 'folder' ? STORE.folders : STORE.items;
-    var want = String(name || '').trim().toLowerCase();
-    if (!want) return null;
-    for (var i = 0; i < arr.length; i++) {
-      var n = arr[i];
-      if (n.chromeId) continue;
-      if (parentKey(n.parent) !== parentKey(parent)) continue;
-      if (String(n.name || '').trim().toLowerCase() === want) return n;
-    }
-    return null;
-  }
-  function isTombstoned(chromeId) {
-    return STORE.deletedChromeIds.indexOf(chromeId) !== -1;
-  }
-  function upsertChromeLink(ch, ourParent) {
-    var ex = findByChromeId('link', ch.id) || matchByName('link', ourParent, ch.title);
-    if (ex) {
-      if (!ex.chromeId) ex.chromeId = ch.id;
-      var name = ch.title || hostOf(ch.url) || ch.url;
-      if (ex.name !== name) { ex.name = name; return true; }
-      if (ex.url !== ch.url) { delete faviconCache[ex.url]; ex.url = ch.url; return true; }
-      return false;
-    }
-    STORE.items.push({
-      id: uid(),
-      chromeId: ch.id,
-      name: ch.title || hostOf(ch.url) || ch.url,
-      url: ch.url,
-      parent: ourParent,
-      index: nextIndex(ourParent)
-    });
-    return true;
-  }
-  function upsertChromeFolder(ch, ourParent) {
-    var ex = findByChromeId('folder', ch.id) || matchByName('folder', ourParent, ch.title);
-    if (ex) {
-      if (!ex.chromeId) ex.chromeId = ch.id;
-      if (ex.name !== ch.title) { ex.name = ch.title; return { id: ex.id, changed: true }; }
-      return { id: ex.id, changed: false };
-    }
-    var fid = uid();
-    STORE.folders.push({ id: fid, chromeId: ch.id, name: ch.title || 'folder', parent: ourParent, index: nextIndex(ourParent) });
-    return { id: fid, changed: true };
-  }
-  function mergeChromeNode(cn, ourParent) {
-    var changed = false;
-    var kids = cn.children || [];
-    for (var i = 0; i < kids.length; i++) {
-      var ch = kids[i];
-      if (ch.id && isTombstoned(ch.id)) continue; /* user deleted this locally */
-      if (ch.url) {
-        if (upsertChromeLink(ch, ourParent)) changed = true;
-      } else {
-        var f = upsertChromeFolder(ch, ourParent);
-        if (f.changed) changed = true;
-        if (ch.children && ch.children.length) {
-          if (mergeChromeNode(ch, f.id)) changed = true;
-        }
-      }
-    }
-    return changed;
-  }
-  function mergeChromeTree() {
-    return new Promise(function (resolve) {
-      if (chromeMerging) { resolve(false); return; }
-      if (!(window.chrome && chrome.bookmarks && chrome.bookmarks.getTree)) { resolve(false); return; }
-      chromeMerging = true;
-      try {
-        chrome.bookmarks.getTree(function (tree) {
-          chromeMerging = false;
-          var changed = false;
-          try {
-            if (tree && tree[0]) changed = mergeChromeNode(tree[0], null);
-          } catch (e) { /* keep local state intact */ }
-          if (changed) { saveUI(); touch(); render(); }
-          resolve(changed);
-        });
-      } catch (e) { chromeMerging = false; resolve(false); }
-    });
-  }
-
   /* ------------------------------------------------------- panel open/close */
 
   function setOpen(open) {
@@ -1251,7 +829,7 @@
     chromeBtn.addEventListener('click', function () {
       if (chromeBtn.classList.contains('syncing')) return;
       chromeBtn.classList.add('syncing');
-      mergeChromeTree().then(function () { chromeBtn.classList.remove('syncing'); });
+      refresh().then(function () { chromeBtn.classList.remove('syncing'); });
     });
   }
   if (backBtn) backBtn.addEventListener('click', goBack);
@@ -1357,47 +935,31 @@
     }
   }, true);
 
+  /* ------------------------------------------------------- public API
+     The sidebar is a direct chrome editor now — it contributes NOTHING to
+     the shared save doc. bind/forDoc/restore are kept only so app.js's
+     guarded calls stay valid; none of them do anything. */
+
+  window.BOOKMARKS = {
+    bind: function () { /* no shared-doc writes anymore */ },
+    forDoc: function () { return null; },           /* no slice in the doc */
+    restore: function () { /* nothing to adopt — bookmarks live in chrome */ },
+    refreshFromChrome: function () { return refresh(); }
+  };
+
   /* ------------------------------------------------------- init */
 
-  var saved = readLS(LS_KEY);
-  if (saved) setData(saved);
+  bindChromeEvents();
+  loadPersistedIcons();
 
-  var uiSaved = readLS(UI_KEY);
-  if (uiSaved && uiSaved.open) ui.open = true;
-
-  render();
-  if (ui.open) {
+  var uiSaved = null;
+  try { uiSaved = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); } catch (e) { /* noop */ }
+  if (uiSaved && uiSaved.open) {
+    ui.open = true;
     root.classList.add('open');
     root.setAttribute('aria-hidden', 'false');
   }
 
-  loadPersistedIcons();
-
-  /* chrome.storage is the durable mirror — extension reloads wipe page
-     localStorage, so the tombstones must come from here when the fast local
-     copy is gone. The first chrome merge MUST wait for this read: if it ran
-     first it would re-import everything the user deleted (no tombstones in
-     memory yet) and persist that, permanently resurrecting the deletions. */
-  function bootFromStorage() {
-    return new Promise(function (resolve) {
-      if (!(window.chrome && chrome.storage && chrome.storage.local)) { resolve(); return; }
-      try {
-        chrome.storage.local.get(LS_KEY, function (o) {
-          try {
-            /* always reconcile with the durable copy — adopt() decides who
-               wins by updatedAt and unions tombstones either way, so a
-               missing/wiped localStorage can't lose deletions */
-            if (o && o[LS_KEY]) adopt(o[LS_KEY]);
-          } catch (e) { /* keep whatever loaded */ }
-          resolve();
-        });
-      } catch (e) { resolve(); }
-    });
-  }
-
-  /* pull the user's real chrome bookmarks in automatically (no-op without
-     the "bookmarks" permission) — only after the durable store is loaded */
-  bootFromStorage().then(function () {
-    mergeChromeTree();
-  });
+  /* first paint: pull the real chrome tree */
+  refresh();
 })();
