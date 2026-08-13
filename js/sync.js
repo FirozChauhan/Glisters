@@ -10,11 +10,14 @@
   var base = String(CF.worker || CF.endpoint || '').replace(/\/+$/, '');
   var cfg = { enabled: !!base };
 
-  function req(method, body) {
+  function req(method, body, headers) {
     var opts = { method: method, headers: {} };
     if (body != null) {
       opts.body = body;
       opts.headers['Content-Type'] = 'application/json';
+    }
+    if (headers) {
+      for (var k in headers) opts.headers[k] = headers[k];
     }
     return fetch(base + '/save', opts).then(function (r) {
       if (r.status === 404) return null;
@@ -28,9 +31,13 @@
     });
   }
 
-  function push(data) {
+  function push(data, seed) {
     if (!cfg.enabled) return Promise.reject(new Error('cloud sync disabled'));
-    return req('PUT', JSON.stringify(data));
+    /* a fresh-install seed (no real local edits yet) is flagged so the
+       worker can refuse to let it overwrite an existing save — a wiped
+       local store must pull + adopt the cloud, never clobber it */
+    var h = seed ? { 'X-Glisters-Seed': '1' } : null;
+    return req('PUT', JSON.stringify(data), h);
   }
 
   function pull() {

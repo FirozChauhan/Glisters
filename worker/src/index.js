@@ -3,20 +3,34 @@
    Fronts the R2 bucket that stores the save file, so the extension never
    needs R2 credentials. The R2 binding (env.SAVE) is Cloudflare-side only.
 
-     GET  /save  → the save file (404 if none)
-     PUT  /save  → overwrite the save file
-     GET  /meta  → best-effort page metadata (title + icons) for the add/edit
-                   modal — fetched server-side so the browser's CORS rules
-                   don't apply; `?url=` must be http(s)
-     OPTIONS    → CORS preflight (extension pages are a cross-origin)
+     GET  /save    → the save file (404 if none)
+     PUT  /save    → overwrite the save file. The previous save is always
+                     kept (rotated to Glisters/save.prev1.json and
+                     save.prev2.json) BEFORE the overwrite, so a clobber
+                     — seed, bug, stale client, malicious PUT — is never
+                     permanent. Pushes flagged X-Glisters-Seed: 1 (a fresh
+                     install seeding from links.txt) are rejected with 409
+                     when a save already exists, so a wiped store can never
+                     overwrite real cloud data — the client then pulls and
+                     adopts the existing save instead.
+     GET  /backup  → the kept previous save(s): { previous, previous2 }
+                     (404 if nothing has ever been overwritten)
+     GET  /meta    → best-effort page metadata (title + icons) for the
+                     add/edit modal — fetched server-side so the browser's
+                     CORS rules don't apply; `?url=` must be http(s)
+     OPTIONS       → CORS preflight (extension pages are a cross-origin)
 --------------------------------------------------------------------------- */
 
 const KEY = 'Glisters/save.json';
+const PREV1 = 'Glisters/save.prev1.json';
+const PREV2 = 'Glisters/save.prev2.json';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  /* X-Glisters-Seed rides on PUT pushes (the seed guard) — it must be
+     preflight-allowable for non-extension (host-permission) callers */
+  'Access-Control-Allow-Headers': 'Content-Type, X-Glisters-Seed',
 };
 
 /* ---- /meta SSRF guard ----------------------------------------------------
@@ -145,6 +159,21 @@ export default {
       }
     }
 
+    if (url.pathname === '/backup') {
+      try {
+        const [p1, p2] = await Promise.all([env.SAVE.get(PREV1), env.SAVE.get(PREV2)]);
+        if (!p1 && !p2) return new Response('no previous save kept yet', { status: 404, headers: CORS });
+        const out = {};
+        if (p1) { try { out.previous = JSON.parse(await p1.text()); } catch (e) { out.previous = null; } }
+        if (p2) { try { out.previous2 = JSON.parse(await p2.text()); } catch (e) { out.previous2 = null; } }
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS, 'Content-Type': 'application/json' },
+        });
+      } catch (e) {
+        return new Response(String((e && e.message) || e), { status: 500, headers: CORS });
+      }
+    }
+
     if (url.pathname !== '/save') {
       return new Response('not found', { status: 404, headers: CORS });
     }
@@ -158,14 +187,36 @@ export default {
            (older updatedAt) must never clobber a newer save. Reject with 409
            so the client re-pulls and adopts the winner instead. */
         const existing = await env.SAVE.get(KEY);
+        let existingText = null;
         if (existing) {
-          try {
-            const old = JSON.parse(await existing.text());
-            if (old && typeof old.updatedAt === 'number' && old.updatedAt > incomingAt) {
-              return new Response('conflict — a newer save exists', { status: 409, headers: CORS });
-            }
-          } catch (e) { /* unreadable existing doc — overwrite */ }
+          /* read the body ONCE — text() drains the stream, so reusing
+             existing.body afterwards would back up an empty object */
+          try { existingText = await existing.text(); } catch (e) { existingText = null; }
+          let old = null;
+          try { old = existingText ? JSON.parse(existingText) : null; } catch (e) { /* unreadable */ }
+          if (old && typeof old.updatedAt === 'number' && old.updatedAt > incomingAt) {
+            return new Response('conflict — a newer save exists', { status: 409, headers: CORS });
+          }
+          /* a fresh install's seed must never replace real cloud data. The
+             client only flags this while it has no real local edits; reject
+             so it pulls and adopts the existing save instead of seeding over
+             it. (Defense-in-depth — the client also prefers the cloud.) */
+          if (request.headers.get('x-glisters-seed') === '1') {
+            return new Response('seed refused — an existing save wins', { status: 409, headers: CORS });
+          }
         }
+        /* keep the outgoing save BEFORE the overwrite: rotate prev1 → prev2,
+           current → prev1. Best-effort — a backup failure must never block
+           the write itself. */
+        try {
+          const oldPrev1 = await env.SAVE.get(PREV1);
+          if (oldPrev1) {
+            let prev1Text = null;
+            try { prev1Text = await oldPrev1.text(); } catch (e) { /* skip */ }
+            if (prev1Text != null) await env.SAVE.put(PREV2, prev1Text);
+          }
+          if (existingText != null) await env.SAVE.put(PREV1, existingText);
+        } catch (e) { /* backup skipped — write continues */ }
         await env.SAVE.put(KEY, body, { httpMetadata: { contentType: 'application/json' } });
         return new Response('ok', { headers: CORS });
       }

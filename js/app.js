@@ -5,12 +5,65 @@
   var SYNC_ENABLED = !!(CF.worker || CF.endpoint);
 
   var STORE_KEY = 'glisters';
+  var SEED_FLAG_KEY = 'glisters-seed'; /* persists that local state came from links.txt */
   var SEED_VERSION = 2; /* bump when links.txt should re-seed existing installs */
+
+  /* the default save: a fresh/wiped install renders THESE links on first
+     paint — no fetch, no cloud, no blank grid. links.txt still overrides
+     (edit it to change what a future fresh install seeds). */
+  var DEFAULT_SITES = [
+    { name: 'Youtube', url: 'https://youtube.com' },
+    { name: 'BlackFlag', url: 'https://docs.google.com/spreadsheets/d/177cnuV9QlHmO6bAGdO1xgN04xnQJCAuLOcj0ckmy4Yk/edit?gid=1167406126#gid=1167406126' },
+    { name: 'Google Maps', url: 'https://maps.google.com/' },
+    { name: 'Google Images', url: 'https://images.google.com/' },
+    { name: 'DeepSeek', url: 'https://chat.deepseek.com/' },
+    { name: 'Google Drive', url: 'https://drive.google.com/drive/home' },
+    { name: 'Tuta Mail', url: 'https://app.tuta.com/mail/Ohr3gNy--F-9' },
+    { name: 'GitHub', url: 'https://github.com/FirozChauhan' },
+    { name: 'Javascript Compiler', url: 'https://nextleap.app/online-compiler/javascript-programming' },
+    { name: 'WhatsApp', url: 'https://web.whatsapp.com/' },
+    { name: 'x.com', url: 'https://x.com/' },
+    { name: 'ImageKit Dashboard', url: 'https://imagekit.io/dashboard/media-library/L0hBWkVM' },
+    { name: 'Instagram', url: 'https://www.instagram.com/' },
+    { name: 'Cloudflare R2', url: 'https://dash.cloudflare.com/a30112ac3e6966496265c81adcab8fcf/r2/default/buckets/jigar' },
+    { name: 'FitGirl', url: 'https://fitgirl-repacks.site/' },
+    { name: 'Pinterest', url: 'https://www.pinterest.com/' },
+    { name: 'Wallhaven', url: 'https://wallhaven.cc/' },
+    { name: 'Fast.com', url: 'https://fast.com/' },
+    { name: 'Pirate Bay', url: 'https://thepiratebay.org' },
+    { name: 'Amazon', url: 'http://amazon.in' },
+    { name: 'Google Translate', url: 'https://translate.google.co.in/?sl=auto&tl=en&op=translate' },
+    { name: 'Google Docs', url: 'http://docs.google.com' },
+    { name: 'WordCounter', url: 'https://wordcounter.net/' },
+    { name: 'AnkerGames', url: 'https://ankergames.net/' },
+    { name: 'Render', url: 'https://dashboard.render.com/' },
+    { name: 'Neon', url: 'https://console.neon.tech/app' },
+    { name: 'Paletton', url: 'https://paletton.com/' },
+    { name: 'GroqCloud', url: 'https://console.groq.com/home' },
+    { name: 'Cloudinary', url: 'https://console.cloudinary.com/app' },
+    { name: 'Gmail', url: 'https://mail.google.com/mail/u/3/#inbox' },
+    { name: 'XXXClub', url: 'https://xxxclub.to/' },
+    { name: 'RARBG', url: 'https://rargb.to/' },
+    { name: 'NSFW - Google Drive', url: 'https://drive.google.com/drive/u/1/folders/14MIlVL7UX7k7pPItT6c0ovUzZai_oO15' },
+    { name: 'DropMMS', url: 'https://dropmms.co/forum/2-desi-new-videos-hd-sd/' },
+    { name: 'Masti Raja', url: 'https://mastiraja.com/' },
+    { name: 'Reddit', url: 'http://www.reddit.com' },
+    { name: 'PornPics', url: 'https://www.pornpics.com/' },
+    { name: 'Emochi', url: 'https://emochi.com/' },
+    { name: 'AI Character Editor', url: 'https://avakson.github.io/character-editor/' },
+    { name: 'Elite Babes', url: 'https://www.elitebabes.com/' },
+    { name: 'ViperGirls', url: 'https://viper.to/forum.php' },
+    { name: 'character.ai', url: 'https://character.ai/' },
+    { name: 'Chub AI', url: 'https://chub.ai/' },
+    { name: 'Streamtape', url: 'https://streamtape.com/accpanel' },
+    { name: 'EXT', url: 'https://ext.to/' },
+    { name: 'cookii.ai', url: 'https://cookii.ai/' }
+  ];
 
   var DEFAULTS = {
     version: SEED_VERSION,
     updatedAt: 0,
-    sites: [],
+    sites: DEFAULT_SITES.slice(),
     settings: { iconSize: 72, colGap: 24, rowGap: 22, cols: 6, rows: 5, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 360, drWidth: 320, mono: false, wallMono: false, blur: 0 }
   };
 
@@ -20,8 +73,9 @@
   if (needSeed) {
     state = Object.assign({}, DEFAULTS);
     state.settings = Object.assign({}, DEFAULTS.settings);
+    state.sites = DEFAULT_SITES.slice(); /* own copy — never share the array */
   } else {
-    state = normalize(saved) || Object.assign({}, DEFAULTS, { settings: Object.assign({}, DEFAULTS.settings) });
+    state = normalize(saved) || Object.assign({}, DEFAULTS, { settings: Object.assign({}, DEFAULTS.settings), sites: DEFAULT_SITES.slice() });
   }
   var focused = -1; /* index into sites; sites.length === the add tile */
   var armed = -1;
@@ -31,7 +85,12 @@
   var retryTimer = null;
   var settingTimer = null;
   var dirty = false;
-  var seededFromLinks = false; /* true only when state was seeded from links.txt (fresh install) */
+  /* true only when state was seeded from links.txt (fresh install). Persisted
+     (localStorage + chrome.storage) so a reload can't forget it: if a seeded
+     doc were ever mistaken for real local data, a fresh timestamp from a boot
+     commit would let LWW push it over the cloud save. The flag drops only on
+     a successful push or adoption. */
+  var seededFromLinks = readSeedFlag();
   var mode = 'none'; /* 'none' | 'drawer' | 'modal' | 'bar' */
 
   function $(s) { return document.querySelector(s); }
@@ -217,6 +276,12 @@
 
   function commit(opts) {
     state.updatedAt = Date.now();
+    /* NOTE: the seed flag is NOT cleared here on purpose. commit() also
+       fires from module hooks (bookmarks merge / walls refresh) during the
+       boot window, before syncStart's pull has settled — clearing it then
+       would let an unflagged seed push clobber real cloud data. The flag is
+       only dropped once a push succeeds or the cloud is adopted, which is
+       the moment the local doc is provably legit. */
     /* callers that already applied the change live (slider drags) skip the
        full grid rebuild — only the capacity-affecting ones re-render */
     if (!opts || !opts.noRender) renderAll();
@@ -747,16 +812,6 @@
     grid.classList.add(dir > 0 ? 'anim-next' : 'anim-prev');
   }
 
-  function animateReorder() {
-    grid.classList.remove('anim-next', 'anim-prev', 'anim-reorder');
-    void grid.offsetWidth; /* reflow so the animation restarts */
-    grid.classList.add('anim-reorder');
-    var tiles = grid.children;
-    for (var i = 0; i < tiles.length; i++) {
-      tiles[i].style.animationDelay = (i * 30) + 'ms';
-    }
-  }
-
   function renderAll() {
     clampPage();
     if (state.sites.length === 0) {
@@ -1026,12 +1081,16 @@
   }, true);
 
   /* drag to reorder — custom pointer drag (HTML5 DnD cancels as soon as the
-     drag fires), with cross-page support via edge auto-flip */
+     drag fires). Butter-smooth: as the ghost crosses the grid the OTHER tiles
+     FLIP-animate out of the way live (DOM reorder + transform transitions),
+     the source tile becomes an invisible gap, and a lifted ghost follows the
+     cursor. Cross-page support via edge auto-flip. */
   var dragFrom = null;
   var dragUi = null;
   var suppressClick = false;
   var autoFlipDir = 0;
   var autoFlipTimer = null;
+  var flipTimer = null;
 
   function stopAutoFlip() {
     autoFlipDir = 0;
@@ -1054,6 +1113,58 @@
     }
   }
 
+  /* FLIP — capture each child's rect KEYED BY ITS NODE so a later layout
+     change can be animated node-by-node: each child is inverted to its own
+     old position then transitioned back, so a DOM reorder reads as a smooth
+     slide instead of a snap (position-keyed rects would animate tiles from
+     the wrong cells). */
+  function snapRects() {
+    var kids = grid.children, out = [];
+    for (var i = 0; i < kids.length; i++) {
+      out.push({ node: kids[i], rect: kids[i].getBoundingClientRect() });
+    }
+    return out;
+  }
+
+  function flipFrom(captured) {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var kids = grid.children;
+    var moved = 0;
+    for (var i = 0; i < kids.length; i++) {
+      var c = kids[i];
+      var old = null;
+      for (var k = 0; k < captured.length; k++) {
+        if (captured[k].node === c) { old = captured[k].rect; break; }
+      }
+      if (!old) continue;
+      var last = c.getBoundingClientRect();
+      var dx = old.left - last.left;
+      var dy = old.top - last.top;
+      if (dx !== 0 || dy !== 0) {
+        c.style.transition = 'none';
+        c.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+        moved++;
+      }
+    }
+    if (!moved) return;
+    void grid.offsetWidth; /* reflow — apply the inversion before playing */
+    for (var j = 0; j < kids.length; j++) {
+      var t = kids[j];
+      if (t.style.transform) {
+        t.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.7, 0.3, 1)';
+        t.style.transform = '';
+      }
+    }
+    if (flipTimer) clearTimeout(flipTimer);
+    flipTimer = setTimeout(function () {
+      var k = grid.children;
+      for (var n = 0; n < k.length; n++) {
+        k[n].style.transition = '';
+        k[n].style.transform = '';
+      }
+    }, 400);
+  }
+
   function highlightDrop(b) {
     var tiles = grid.querySelectorAll('.tile.drop-target');
     for (var i = 0; i < tiles.length; i++) tiles[i].classList.remove('drop-target');
@@ -1065,11 +1176,18 @@
     g.removeAttribute('id');
     g.className = 'tile drag-ghost';
     g.style.width = b.offsetWidth + 'px';
+    /* the tile sizing vars (--ts, label styles) live as inline styles on the
+       grid element — the ghost sits on <body>, so copy them or the icon box
+       has no size and the favicon stretches to its natural dimensions */
+    ['--ts', '--label-op', '--label-color'].forEach(function (v) {
+      g.style.setProperty(v, grid.style.getPropertyValue(v));
+    });
     document.body.appendChild(g);
     return g;
   }
 
   function cleanupDrag() {
+    if (flipTimer) { clearTimeout(flipTimer); flipTimer = null; }
     if (dragUi && dragUi.ghost) dragUi.ghost.remove();
     dragUi = null;
     dragFrom = null;
@@ -1078,6 +1196,75 @@
     for (var i = 0; i < d.length; i++) d[i].classList.remove('dragging');
     highlightDrop(null);
     stopAutoFlip();
+  }
+
+  /* the dragged tile's node on the current page (null when it lives on
+     another page) */
+  function draggedNode() {
+    return dragFrom == null ? null : grid.querySelector('[data-idx="' + dragFrom + '"]');
+  }
+
+  /* grid cell geometry, measured once at drag start (before any reorder) so
+     the pointer → cell mapping stays stable while tiles FLIP around */
+  function measureGrid() {
+    var first = grid.querySelector('.tile');
+    if (!first) return null;
+    var r = first.getBoundingClientRect();
+    var cs = getComputedStyle(grid);
+    var cg = parseFloat(cs.columnGap) || 0;
+    var rg = parseFloat(cs.rowGap) || 0;
+    return {
+      originX: r.left, originY: r.top,
+      strideX: r.width + cg, strideY: r.height + rg,
+      cols: Math.max(1, state.settings.cols), rows: Math.max(1, state.settings.rows)
+    };
+  }
+
+  function slotAt(g, x, y) {
+    var col = Math.round((x - g.originX) / g.strideX);
+    var row = Math.round((y - g.originY) / g.strideY);
+    col = Math.max(0, Math.min(col, g.cols - 1));
+    row = Math.max(0, Math.min(row, g.rows - 1));
+    return row * g.cols + col;
+  }
+
+  function inGridBounds(g, x, y) {
+    var x0 = g.originX - g.strideX * 0.5;
+    var x1 = g.originX + (g.cols - 1) * g.strideX + g.strideX * 0.5;
+    var y0 = g.originY - g.strideY * 0.5;
+    var y1 = g.originY + (g.rows - 1) * g.strideY + g.strideY * 0.5;
+    return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+  }
+
+  /* live reorder: move the dragged tile's DOM node into the cell under the
+     pointer and FLIP the displaced tiles out of the way. Cell-based (not
+     hit-testing) so the tile never 'runs away' from the cursor. The target
+     is the child INDEX that src must occupy: moving right (cur < slot)
+     inserts before the child that follows the slot, moving left before the
+     child that is at the slot. */
+  function reorderToSlot(slot) {
+    var src = draggedNode();
+    if (!src) return; /* dragged tile lives on another page — visual only */
+    var kids = grid.children;
+    var cap = Math.max(1, state.settings.cols * state.settings.rows);
+    if (slot >= cap) slot = cap - 1;
+    var cur = Array.prototype.indexOf.call(kids, src);
+    if (cur === -1 || cur === slot) return; /* already in the target cell */
+    var idx = cur < slot ? slot + 1 : slot;
+    var anchor = idx < kids.length ? kids[idx] : null;
+    var rects = snapRects();
+    grid.insertBefore(src, anchor);
+    flipFrom(rects);
+  }
+
+  /* slide the grid back to its original order (drag cancelled) */
+  function undoLiveOrder() {
+    if (!dragUi || !dragUi.orig || dragUi.orig.length < 2) return;
+    var rects = snapRects();
+    for (var i = 0; i < dragUi.orig.length; i++) {
+      if (dragUi.orig[i].parentNode === grid) grid.appendChild(dragUi.orig[i]);
+    }
+    flipFrom(rects);
   }
 
   grid.addEventListener('pointerdown', function (e) {
@@ -1089,7 +1276,8 @@
       from: dragFrom,
       startX: e.clientX, startY: e.clientY,
       lastX: e.clientX, lastY: e.clientY,
-      moved: false, ghost: null
+      moved: false, ghost: null, page: page,
+      geom: null, orig: null, lastSlot: -1, lastInGrid: false, pageChangedAt: 0
     };
   });
 
@@ -1101,17 +1289,43 @@
       dragUi.moved = true;
       e.preventDefault();
       grid.classList.add('dragging-active');
-      var src = grid.querySelector('[data-idx="' + dragUi.from + '"]');
+      dragUi.geom = measureGrid();
+      dragUi.orig = Array.prototype.slice.call(grid.children);
+      var src = draggedNode();
       if (src) src.classList.add('dragging');
       dragUi.ghost = makeGhost(src || e.target.closest('.tile'));
-      dragUi.ghost.style.transform = 'translate(' + (dragUi.startX + 10) + 'px,' + (dragUi.startY + 10) + 'px)';
+      dragUi.ghost.style.transform = 'translate(' + (dragUi.startX + 12) + 'px,' + (dragUi.startY + 12) + 'px) scale(1.06)';
     }
-    if (!dragUi.moved) return;
+    if (!dragUi.moved || !dragUi.geom) return;
     e.preventDefault();
     dragUi.lastX = e.clientX; dragUi.lastY = e.clientY;
-    dragUi.ghost.style.transform = 'translate(' + (e.clientX + 10) + 'px,' + (e.clientY + 10) + 'px)';
+    dragUi.ghost.style.transform = 'translate(' + (e.clientX + 12) + 'px,' + (e.clientY + 12) + 'px) scale(1.06)';
     armAutoFlip(e.clientX, e.clientY);
-    highlightDrop(e.target.closest ? e.target.closest('.tile') : null);
+    /* after a page flip the grid was re-rendered — re-apply the dragged
+       state to the fresh node, re-measure, and hold reorder until the page
+       slide settles */
+    if (dragUi.page !== page) {
+      dragUi.page = page;
+      dragUi.pageChangedAt = Date.now();
+      dragUi.geom = measureGrid();
+      dragUi.orig = Array.prototype.slice.call(grid.children);
+      dragUi.lastSlot = -1;
+      var fresh = draggedNode();
+      if (fresh) fresh.classList.add('dragging');
+    }
+    var g = dragUi.geom;
+    var inGrid = inGridBounds(g, e.clientX, e.clientY);
+    dragUi.lastInGrid = inGrid;
+    if (inGrid) {
+      var slot = slotAt(g, e.clientX, e.clientY);
+      dragUi.lastSlot = slot;
+      var kids = grid.children;
+      var b = kids[slot] && kids[slot].classList.contains('tile') ? kids[slot] : null;
+      highlightDrop(b);
+      if (Date.now() - dragUi.pageChangedAt > 380) reorderToSlot(slot);
+    } else {
+      highlightDrop(null);
+    }
   });
 
   window.addEventListener('pointerup', function (e) {
@@ -1121,29 +1335,35 @@
       e.preventDefault();
       stopAutoFlip();
       suppressClick = true;
-      /* the release point may be outside the document (browser chrome,
-         another window) — then the target is window, not a DOM node */
-      var tgt = e.target && e.target.nodeType === 1 ? e.target : null;
-      var b = tgt && tgt.closest ? tgt.closest('.tile') : null;
-      var inGrid = !!(tgt && grid.contains(tgt));
-      /* drop on a tile = move before it; on the grid's empty area = append;
-         anywhere outside the grid = cancel the drag, keep the tile put */
-      var to = b ? parseInt(b.dataset.idx, 10) : (inGrid ? pageEnd() + 1 : -1);
-      if (to > state.sites.length) to = state.sites.length;
-      if (to >= 0 && to !== dragFrom) {
-        var arr = state.sites.slice();
-        var movedSite = arr.splice(dragFrom, 1)[0];
-        arr.splice(dragFrom < to ? to - 1 : to, 0, movedSite);
-        mutateSite(function () { state.sites = arr; });
-        focused = dragFrom < to ? to - 1 : to;
-        renderTileStates();
-        animateReorder();
+      /* commit uses the same cell-based mapping as the live reorder, so the
+         released tile lands exactly where the drag left it — even if the
+         FLIP animation was mid-flight under the pointer */
+      var g = dragUi.geom;
+      var inGrid = g && inGridBounds(g, e.clientX, e.clientY);
+      if (g && inGrid) {
+        var slot = slotAt(g, e.clientX, e.clientY);
+        var to = pageStart() + slot;
+        if (to > state.sites.length) to = state.sites.length;
+        if (to !== dragFrom) {
+          var arr = state.sites.slice();
+          var movedSite = arr.splice(dragFrom, 1)[0];
+          arr.splice(to, 0, movedSite);
+          mutateSite(function () { state.sites = arr; });
+          focused = to;
+          renderTileStates();
+        }
+      } else {
+        /* released outside the grid — cancel and slide the tiles back */
+        undoLiveOrder();
       }
     }
     cleanupDrag();
   });
 
-  window.addEventListener('pointercancel', cleanupDrag);
+  window.addEventListener('pointercancel', function () {
+    if (dragUi && dragUi.moved) undoLiveOrder();
+    cleanupDrag();
+  });
 
   /* ------------------------------------------------------------------ modal */
 
@@ -1653,6 +1873,43 @@
 
   syncNow.addEventListener('click', pushCloud);
 
+  /* one-click JSON download of the whole save — the standing insurance
+     against any future wipe/clobber. Keep a copy somewhere outside the
+     browser (drive, repo, notes) and you can always rebuild. */
+  $('#backupDownload').addEventListener('click', function () {
+    var d = doc();
+    var blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'glisters-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 2000);
+  });
+
+  /* undo the last cloud adoption — restores the doc that was current before
+     the previous adoptRemote(). */
+  $('#restorePrevious').addEventListener('click', function () {
+    readPrevious(function (raw) {
+      if (!raw) { setSyncStatus('error', 'no previous save to restore'); return; }
+      var obj = null;
+      try { obj = JSON.parse(raw); } catch (e) { /* unreadable */ }
+      if (!obj) { setSyncStatus('error', 'previous save unreadable'); return; }
+      state = normalize(obj) || state;
+      seededFromLinks = false;
+      clearSeedFlag();
+      renderAll();
+      persistLocal();
+      if (window.BOOKMARKS) window.BOOKMARKS.restore(state.bookmarks);
+      if (window.WALLS) window.WALLS.restore(state.walls);
+      /* scheduleCloud() overwrites the pill with 'syncing…', so show the
+         confirmation first, then sync */
+      scheduleCloud();
+      setSyncStatus('synced', 'restored previous save');
+    });
+  });
+
   /* ------------------------------------------------------------------ sync */
 
   function setSyncStatus(kind, text) {
@@ -1674,12 +1931,69 @@
     cloudTimer = setTimeout(pushCloud, 1300);
   }
 
+  /* every adoption replaces local state — keep the outgoing doc under its
+     own key first so a wrong adoption is undoable (settings → backup →
+     restore previous). Mirrored to chrome.storage so it survives reloads. */
+  function stashPrevious(d) {
+    try { localStorage.setItem(STORE_KEY + '-previous', JSON.stringify(d)); } catch (e) { /* quota */ }
+    if (window.chrome && chrome.storage && chrome.storage.local) {
+      try {
+        var o = {};
+        o[STORE_KEY + '-previous'] = d;
+        chrome.storage.local.set(o);
+      } catch (e) { /* noop */ }
+    }
+  }
+
+  /* --- persisted seed flag: survives reloads so a wiped install that seeded
+         from links.txt can never be mistaken for real local data again --- */
+
+  function persistSeedFlag() {
+    try { localStorage.setItem(SEED_FLAG_KEY, '1'); } catch (e) { /* quota */ }
+    if (window.chrome && chrome.storage && chrome.storage.local) {
+      try {
+        var o = {};
+        o[SEED_FLAG_KEY] = 1;
+        chrome.storage.local.set(o);
+      } catch (e) { /* noop */ }
+    }
+  }
+
+  function clearSeedFlag() {
+    try { localStorage.removeItem(SEED_FLAG_KEY); } catch (e) { /* noop */ }
+    if (window.chrome && chrome.storage && chrome.storage.local) {
+      try { chrome.storage.local.remove(SEED_FLAG_KEY); } catch (e) { /* noop */ }
+    }
+  }
+
+  function readSeedFlag() {
+    try { if (localStorage.getItem(SEED_FLAG_KEY) === '1') return true; } catch (e) { /* noop */ }
+    return false;
+  }
+
+  function readPrevious(cb) {
+    var raw = null;
+    try { raw = localStorage.getItem(STORE_KEY + '-previous'); } catch (e) { /* noop */ }
+    if (raw) { cb(raw); return; }
+    if (window.chrome && chrome.storage && chrome.storage.local) {
+      try {
+        chrome.storage.local.get(STORE_KEY + '-previous', function (o) {
+          cb((o && o[STORE_KEY + '-previous']) || null);
+        });
+        return;
+      } catch (e) { /* fall through */ }
+    }
+    cb(null);
+  }
+
   /* adopt a cloud save: replace local state with the remote doc and hand the
      slices to the sidebar + wallpapers. Called when the cloud is newer
      (conflict / another tab or device wrote since). */
   function adoptRemote(remote) {
+    stashPrevious(doc());
     state = normalize(remote);
     seededFromLinks = false;
+    clearSeedFlag();
     dirty = false;
     renderAll();
     persistLocal();
@@ -1691,7 +2005,7 @@
   function pushCloud() {
     if (!SYNC_ENABLED) { setSyncStatus('off', 'cloud off'); return Promise.resolve(false); }
     setSyncStatus('syncing', 'syncing…');
-    return window.SYNC.push(doc()).then(function (r) {
+    return window.SYNC.push(doc(), seededFromLinks).then(function (r) {
       if (r && r.conflict) {
         /* the worker rejected the push — a newer save exists. Pull it and
            adopt so the newer changes win instead of being clobbered (the
@@ -1712,6 +2026,9 @@
           return false;
         });
       }
+      /* the doc made it to the cloud — it is no longer a tentative seed */
+      seededFromLinks = false;
+      clearSeedFlag();
       dirty = false;
       clearTimeout(retryTimer);
       setSyncStatus('synced', 'synced');
@@ -1733,7 +2050,7 @@
 
   window.addEventListener('pagehide', function () {
     if (!SYNC_ENABLED || !dirty) return;
-    window.SYNC.push(doc()).catch(function () { /* local copy survives regardless */ });
+    window.SYNC.push(doc(), seededFromLinks).catch(function () { /* local copy survives regardless */ });
   });
 
   /* visible probe for the settings drawer: proves whether local + extension
@@ -1793,13 +2110,17 @@
         else setSyncStatus('synced', 'synced');
         return;
       }
-      /* fresh install / wiped store — prefer the cloud save over the seed */
-      if (remote && remote.version === SEED_VERSION && remote.sites && remote.sites.length) {
+      /* fresh install / wiped store — the cloud save is ALWAYS authoritative
+         over the seed, even if it's empty (the user deliberately cleared it
+         or a prior seed now lives there). A seed must never overwrite it. */
+      if (remote && remote.version === SEED_VERSION) {
         adoptRemote(remote);
         setSyncStatus('synced', 'restored from cloud');
         return;
       }
-      /* cloud empty or mismatched — keep the seed locally, back it up */
+      /* no cloud save at all — the seed becomes the first save. It is pushed
+         flagged as a seed, so if anything appears on the cloud between the
+         pull and the push, the worker refuses and we adopt instead. */
       setSyncStatus('ready', 'nothing on cloud yet');
       pushCloud();
     }).catch(function () {
@@ -1819,24 +2140,40 @@
 
   if (needSeed) {      restoreFromStorage().then(function (stored) {
         if (stored) {
-          state = normalize(stored);
-          renderAll();
-          persistLocal();
-          if (window.BOOKMARKS) window.BOOKMARKS.restore(state.bookmarks);
-          if (window.WALLS) window.WALLS.restore(state.walls);
-          syncStart();
+          var proceed = function () {
+            state = normalize(stored);
+            renderAll();
+            persistLocal();
+            if (window.BOOKMARKS) window.BOOKMARKS.restore(state.bookmarks);
+            if (window.WALLS) window.WALLS.restore(state.walls);
+            syncStart();
+          };
+          /* localStorage may have been evicted while chrome.storage survived —
+             pick the persisted seed flag up from there too before syncing. */
+          if (window.chrome && chrome.storage && chrome.storage.local) {
+            try {
+              chrome.storage.local.get(SEED_FLAG_KEY, function (o) {
+                seededFromLinks = seededFromLinks || !!(o && o[SEED_FLAG_KEY] === 1);
+                proceed();
+              });
+              return;
+            } catch (e) { /* fall through */ }
+          }
+          proceed();
           return;
         }
       loadLinks().then(function (links) {
         state.sites = links;
         state.updatedAt = Date.now();
         seededFromLinks = true;
+        persistSeedFlag();
         renderAll();
         persistLocal();
         syncStart();
       }).catch(function () {
         state.updatedAt = Date.now();
         seededFromLinks = true;
+        persistSeedFlag();
         renderAll();
         persistLocal();
         syncStart();

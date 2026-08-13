@@ -115,7 +115,9 @@ drawer, drag-reorder, page flips, and orchestrates the other modules.
 **Module state** (top of the IIFE):
 - `STORE_KEY = 'glisters'` — localStorage + chrome.storage key for the main
   doc. `SEED_VERSION = 2` — bump to force re-seeding of existing installs.
-- `DEFAULTS` — clean-state doc with full `settings` defaults.
+- `DEFAULT_SITES` — the baked-in default save: the user's 46 links with
+  clean names. `DEFAULTS.sites` starts from it, so a fresh/wiped install
+  renders the links on first paint with zero fetches (offline-safe).
 - `state` — live in-memory doc (`version`, `updatedAt`, `sites[]`, `settings`,
   plus `bookmarks`/`walls` slices added by `doc()`).
 - `focused` / `armed` (indices), `page`, `mode`
@@ -133,11 +135,16 @@ drawer, drag-reorder, page flips, and orchestrates the other modules.
 - `commit(opts)` — stamps `updatedAt`, re-renders (unless `noRender`),
   persists, and schedules a cloud push (unless `noCloud`).
 
-**links.txt seeding**: On a fresh install (`needSeed`), if no stored doc is
-recoverable, it fetches `links.txt` (`loadLinks()`), derives display names via
-`nameForUrl()` (title-case map `TITLE_CASE`, `prettyBase`, Google-product
-detection), dedupes names, and seeds `state.sites`. Sets `seededFromLinks`
-so a first cloud sync prefers the cloud copy over the seed.
+**links.txt seeding**: On a fresh install (`needSeed`), `state` starts from
+`DEFAULT_SITES` (the baked default save) so the grid is never blank. If a
+stored doc is unrecoverable it then fetches `links.txt` (`loadLinks()`), which
+overrides the baked list — edit `links.txt` to change what a future fresh
+install seeds. Derives display names via `nameForUrl()` (title-case map
+`TITLE_CASE`, `prettyBase`, Google-product detection), dedupes names. Sets
+`seededFromLinks` **and persists it** (`glisters-seed` in localStorage +
+chrome.storage) so a reload can never mistake the seed for real local data —
+that was the clobber vector that let a wiped install's seed overwrite the
+cloud save via LWW.
 
 **Favicon resolution** (`iconCandidates`, `loadIcon`, caches) — critical
 subsystem:
@@ -170,10 +177,18 @@ cancelled by any other handled key. Keys ignored while typing in inputs.
 **Mouse**: wheel→horizontal page flip (throttled 180ms) with ctrl exempt;
 hover sets focus but keeps `mouse-nav` ring hidden; click opens (ctrl/meta =
 new tab); right-click overlays edit/delete ctx buttons on the icon; custom
-pointer-based **drag-reorder** with ghost, edge auto-flip across pages
-(480ms interval when within 70px of edge), drop-before on tiles/append on empty
-grid area/cancel outside grid, followed by a ghost-click suppression
-(`suppressClick`).
+pointer-based **drag-reorder** that is butter-smooth: the source tile becomes
+an invisible gap, a lifted ghost (scale + shadow) follows the cursor, and the
+OTHER tiles **FLIP-animate out of the way live** — the target cell is computed
+from pointer position against the grid geometry (measured once at drag start,
+so tiles never 'run away' from the cursor), the dragged node is re-inserted at
+that cell, and displaced tiles slide via inverted transform transitions
+(`snapRects`/`flipFrom`). Drop commits the same cell mapping (land exactly
+where the drag left it); releasing outside the grid slides the tiles back
+(`undoLiveOrder`). Edge auto-flip across pages (480ms interval within 70px of
+the edge) re-measures geometry and holds reorder ~380ms until the page slide
+settles. Followed by a ghost-click suppression (`suppressClick`). Honors
+`prefers-reduced-motion` (reorder still works, no animations).
 
 **Pagination**: `pageCount()` = ceil(sites/capacity), capacity =
 `cols×rows`. Pages loop; wrap direction tracks travel direction. Page flips use
@@ -312,12 +327,23 @@ shared `'glisters-icons'` persisted cache (self-contained by design).
 `window.CONFIG = { worker, wallhavenKey?, generatedAt }`. `config.example.js`
 is a stub. Never hand-edit `config.js`.
 
-### 3.10 `worker/src/index.js` (~186 lines) — Cloudflare Worker
+### 3.10 `worker/src/index.js` (~220 lines) — Cloudflare Worker
 - R2 binding `env.SAVE` holds the key `'Glisters/save.json'`.
 - Routes: `OPTIONS` preflight (CORS `*`); `GET/PUT /save`;
-  `GET /meta?url=` (server-side title/icon scraping, CORS-free).
+  `GET /backup` (the kept previous save(s): `{previous, previous2}`,
+  `404` until something has been overwritten); `GET /meta?url=`
+  (server-side title/icon scraping, CORS-free).
 - **Last-write-wins**: PUT parses incoming `updatedAt`, compares with the
   stored doc; if stored is newer → `409` so the client pulls and adopts.
+- **Never lose the previous save**: before every accepted overwrite the
+  outgoing doc is rotated to `Glisters/save.prev1.json` (then
+  `save.prev2.json`) — a clobber (seed, bug, stale client, malicious PUT)
+  is one `PUT /save` away from being undone via `GET /backup`. Backup is
+  best-effort and never blocks the write.
+- **Seed guard**: a PUT flagged `X-Glisters-Seed: 1` (the client's fresh
+  install seeding from `links.txt`, before any real edits) is rejected with
+  `409` when a save already exists, so a wiped local store can never
+  overwrite real cloud data — the client pulls and adopts instead.
 - **SSRF guard** (`isPrivateHost`) on `/meta`: only public http(s), ports
   80/443; rejects localhost/`.local`/`.internal`/metadata, all private IPv4
   ranges (0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24,
@@ -342,9 +368,7 @@ Generates `icons/icon{16,48,128}.png` with a hand-rolled PNG encoder (zlib
 deflate + CRC32): dark square, thin light frame, hollow centre. Zero image
 dependencies. Run `node scripts/gen-icons.mjs`.
 
-### 3.14 `links.txt`First-run seed, one URL per line (a small sample ships in the repo; delete or edit it to taste — an absent file feeds gracefully to `loadLinks()` failing). Names are
-derived at seed time. Bump `SEED_VERSION` in app.js to re-seed existing
-installs.
+### 3.14 `links.txt`First-run seed override, one URL per line (the repo ships the user's 46 links). A fresh install seeds from the baked-in `DEFAULT_SITES` in app.js on first paint; `links.txt` overrides that list when it loads — edit it to change what a future fresh install seeds. An absent file falls back to the baked defaults (no more silent empty grid). Names are derived at seed time. Bump `SEED_VERSION` in app.js to re-seed existing installs.
 
 ### 3.15 `icons/`
 16/48/128 PNGs (generated). Referenced in manifest + visual only.
@@ -401,12 +425,13 @@ stored one (409). The client then pulls and adopts the newer doc. This is the
 2. `localStorage` — fast synchronous read at boot; *not* durable across
    extension reloads.
 3. `chrome.storage.local` — the durable mirror (survives reloads and local
-   storage eviction). Each module keeps its own key(s):
-   - `glisters` (app doc), `glisters-icons` (shared favicon winner map),
-   - `glisters-walls` (wallpaper doc), `glisters-bk` (sidebar doc),
-     `glisters-bk-ui` (panel open state).
-4. Cloud (R2 via Worker) — mirror + multi-device; only `Glisters/save.json`.
-
+   storage eviction). Each module keeps its own key(s):  - `glisters` (app doc), `glisters-previous` (pre-adoption stash, see §7),
+  - `glisters-icons` (shared favicon winner map),
+  - `glisters-walls` (wallpaper doc), `glisters-bk` (sidebar doc),
+    `glisters-bk-ui` (panel open state).
+4. Cloud (R2 via Worker) — mirror + multi-device; only `Glisters/save.json`,
+   plus the automatic previous-save copies `save.prev1/prev2.json` kept by
+   the worker before every overwrite (recoverable via `GET /backup`).
 Rule of thumb: **chrome.storage is authoritative for durability; localStorage
 is the fast path; cloud is a mirror that newer-wins.** Boot always reconciles
 chrome.storage into memory before doing destructive work (see bookmarks boot
@@ -448,11 +473,21 @@ Note the page never steals focus (address bar keeps it) — keys only live after
 the user clicks/tabs in.
 
 ### Cloud sync decision (app.js)
-- Local edits → `commit()` → `scheduleCloud()` → push in 1.3s.
+- Local edits → `commit()` → `scheduleCloud()` → push in 1.3s. The first
+  real edit clears `seededFromLinks` so later pushes are never flagged as
+  seeds.
 - Push failure → dirty, retry 20s + on `online`/focus/unload.
 - Push 409 → pull newer, `adoptRemote`.
 - Boot pull → newer remote (and not locally dirty) wins via `adoptRemote`;
-  otherwise push local.
+  otherwise push local. A fresh install / wiped store adopts ANY valid
+  cloud doc (even an empty one — the user may have cleared it deliberately)
+  rather than seeding over it; the seed is only pushed when the cloud has
+  nothing at all, and even then flagged so the worker can refuse if a save
+  appears in between.
+- `adoptRemote` first stashes the outgoing local doc under
+  `glisters-previous` (localStorage + chrome.storage) so a bad adoption is
+  undoable via settings → backup → restore previous.
+- Settings → backup → download saves the whole doc as a JSON file.
 
 ### Favicon for a tile
 `tileEl` → cached decoded element? reuse. Else `persistedIcons[key]` (single
@@ -548,7 +583,9 @@ so the async merge window can't resurrect them).
 6. **`textContent` for data, `innerHTML` only for static SVG**.
 7. **chrome.storage is the durable copy; boot must reconcile it before
    destructive work.**
-8. Bump `SEED_VERSION` (app.js) deliberately and document why; bump walls doc
+8. **Never let a fresh seed overwrite a real save** — client prefers the
+   cloud on boot; the worker refuses seed-flagged PUTs over an existing doc.
+9. Bump `SEED_VERSION` (app.js) deliberately and document why; bump walls doc
    `v` only with a migration path.
 9. Run `node scripts/gen-icons.mjs` (initial) and `node scripts/gen-config.mjs`
    (after `.env` changes). No lint/typecheck/build pipeline exists — the app is

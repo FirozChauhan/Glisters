@@ -340,7 +340,10 @@ kbd {
 .grid.mouse-nav .tile.focused .icon { box-shadow: none; }
 .tile.armed .icon { box-shadow: 0 0 0 2px var(--page), 0 0 0 3px var(--danger); }
 
-.tile.dragging { opacity: 0.35; }
+/* during a drag the source tile becomes an invisible gap — its grid slot
+   stays so the layout doesn't jump, but it's not hittable (visibility, not
+   opacity) so the pointer never lands back on it */
+.tile.dragging { visibility: hidden; }
 .tile.drop-target .icon { box-shadow: 0 0 0 2px var(--page), 0 0 0 3px #fff; }
 .tile.drag-ghost {
   position: fixed !important;
@@ -349,21 +352,17 @@ kbd {
   margin: 0 !important;
   pointer-events: none;
   z-index: 1000;
-  opacity: 0.85;
+  opacity: 0.9;
   user-select: none;
+  will-change: transform;
+  filter: drop-shadow(0 12px 22px rgba(0, 0, 0, 0.45));
 }
 .tile.drag-ghost .icon { outline: 1px dashed rgba(0, 0, 0, 0.7); }
 .grid.dragging-active { cursor: grabbing; }
 .grid.dragging-active .tile { user-select: none; }
+/* keep the sliding tiles on their own composited layer while they FLIP */
+.grid.dragging-active .tile { will-change: transform; }
 
-.grid.anim-reorder .tile {
-  animation: tile-in 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
-}
-
-@keyframes tile-in {
-  from { opacity: 0; transform: translateY(10px) scale(0.96); }
-  to { opacity: 1; transform: none; }
-}
 
 /* ---------------------------------------------------------------------------
    empty state
@@ -711,6 +710,9 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 .switch input:focus-visible + .track { outline: 1px solid var(--line); outline-offset: 3px; }
 
 .set-row.sync-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+
+.set-row.backup-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+.backup-btns { display: flex; flex-direction: row; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 .sync-pill {
   display: inline-flex;
