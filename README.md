@@ -1,83 +1,135 @@
-<p align="center">
-  <img src="icons/icon.svg" width="88" height="88" alt="Glisters logo">
-</p>
+# Glisters — New Tab
 
-<h1 align="center">Glisters</h1>
+> Minimal keyboard-first new tab — vim shortcut grid, live Chrome bookmarks, Wallhaven wallpapers, Cloudflare sync.
 
-<p align="center">
-  A minimal, keyboard-first new tab for Chrome.<br>
-  Sharp corners · mono labels · vim keys · no dependencies · no build step
-</p>
+![JavaScript](https://img.shields.io/badge/JavaScript-ES5--style-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
+![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-4285F4?style=flat-square&logo=google-chrome&logoColor=white)
+![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)
+![R2 Storage](https://img.shields.io/badge/R2-Storage-20232A?style=flat-square)
+![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A518-339933?style=flat-square&logo=node.js&logoColor=white)
+![Wallhaven -optional](https://img.shields.io/badge/Wallhaven--optional-3867d6?style=flat-square)
 
 ---
 
-## Features
+## Why This Project Exists
 
-- **Shortcut grid** — a 6×5 grid that paginates into more pages (`tab`, `shift+tab`, wheel), with drag-reorder and hi-res favicons that resolve favicon → apple-touch-icon → Google s2 → DDG, falling back to a letter monogram
-- **Vim control** — `h j k l` to move, `enter`/`o` to open, `/` command bar, `a e d` add/edit/delete — everything, no mouse required
-- **Bookmarks sidebar** — a right-edge panel that edits Chrome's real bookmarks directly (add, delete, move, drag-and-drop, folders, breadcrumbs) — no copy, no local store
-- **Wallpapers** — a rotating 10-shot pool from Wallhaven's monthly toplist, purity/category filters, favourites, and a persistent "safe" wallpaper; 24-hour rotation with offline fallback
-- **Cloud sync** — the whole save file mirrors to a Cloudflare Worker + R2, last-write-wins by timestamp (a stale copy can never clobber a newer one)
-- **Settings drawer** — live sliders for grid layout, icon size, gaps, label styling, sidebar/drawer widths, monochrome icons
-- **Privacy-minded** — no HTML injection (`textContent` everywhere), no remote code, no analytics, no telemetry
+A new-tab page is dead time and a sync layer is usually a silent data-loss trap. Glisters makes the page fully keyboard-driven and treats the cloud as a hostile boundary where a fresh install must never clobber real data.
 
-The page is served directly as the new-tab override, so Chrome keeps the address bar focused — type straight into the bar like a stock new tab. Keys take over once you click or tab into the page.
+## What It Does
 
-## Keys
+- **Vim shortcut grid** — navigate, open, add, edit, delete every tile with keys only (`h j k l`, `enter`, `a`, `e`, `d`); the mouse stays optional and never steals the address bar (`js/app.js:902`).
+- **Butter-smooth drag-reorder** — drag a tile and the others FLIP out of the way live, with edge auto-flip across pages; dropping lands the tile exactly where you left it (`js/app.js:1133`).
+- **Live bookmarks sidebar** — a direct editor for Chrome's real bookmarks, written straight through `chrome.bookmarks`; changes from any device appear instantly (`js/bookmarks.js:669`).
+- **Daily wallpaper pool** — 10 wide Wallhaven toplist shots (≥1.5:1) cycled with `w`, favourites capped at 60, and a safe default that survives pool swaps (`js/walls.js:43`).
+- **Cloud sync with a parachute** — the whole save mirrors to R2; every accepted write keeps the previous two saves recoverable via `/backup` (`worker/src/index.js:208`).
+- **Auto-detected metadata** — add a URL and the name plus icon picker fill themselves, fetched direct or via the worker's `/meta`, capped at 4 MB and an 8 s abort (`js/app.js:1506`).
+- **Command bar** — `/` or `:` matches by name, then URL, then Google; pasting an image reverse-searches it (`js/app.js:1605`).
 
-| Key | Action | Where |
+Real bounds enforced in code: site names clamped to 300 chars, URLs to 4096, icons `https://` only (`js/app.js:226`); delete requires a 2.5 s arm-and-confirm (`js/app.js:988`).
+
+## Architecture
+
+```mermaid
+flowchart LR
+  A[Chrome new tab] --> B[newtab.html shell]
+  B --> C[app.js - grid, vim keys, drag]
+  C --> D[localStorage + chrome.storage.local]
+  D --> E[Cloudflare Worker sync]
+  E --> F[R2 save.json + prev backups]
+  B --> G[bookmarks.js - chrome.bookmarks]
+  B --> H[walls.js - Wallhaven pool]
+```
+
+Changing a setting stamps `updatedAt` and `persistLocal()` dual-writes, then `scheduleCloud()` PUTs the whole doc to the worker within 1.3 s (`js/app.js:1935`), which rotates the old save to `save.prev1.json` before accepting the write (`worker/src/index.js:218`).
+
+## Key Technical Decisions
+
+### 1. Two-Tier State (storage hierarchy)
+
+**Problem:** A new-tab page reloads constantly and localStorage can be evicted, so a single store loses the save.
+
+**Solution:** Every commit writes both localStorage (fast boot read) and `chrome.storage.local` (durable mirror); the cloud is a newer-wins third copy.
+
+**Outcome:** Boot reads the fast copy first, reconciles the durable one, and never lets a fresh seed overwrite a real save. `js/app.js:257`
+
+### 2. A Sync Protocol That Never Loses a Save (correctness)
+
+**Problem:** Last-write-wins silently discards data, and a wiped local store seeding over the cloud is the worst clobber.
+
+**Solution:** The worker rejects PUTs with an older `updatedAt` (409) and rejects seed-flagged pushes over an existing save; before every accepted write it rotates the old doc to `save.prev1`/`save.prev2`.
+
+**Outcome:** Any clobber — bug, stale client, malicious PUT — is one `GET /backup` away from being undone. `worker/src/index.js:197`
+
+### 3. The Cloud Boundary Is Hostile (security)
+
+**Problem:** The worker accepts unauthenticated PUTs, so the save file is editable by anyone who knows the URL.
+
+**Solution:** `normalize()` clamps name ≤300 and url ≤4096, accepts only http(s) icons, and `normUrl()` refuses to navigate `javascript:`/`data:`/`file:` schemes.
+
+**Outcome:** A tampered save cannot execute code in the extension or inject styles. `js/app.js:226`
+
+### 4. SSRF-Proof Metadata Proxy (security)
+
+**Problem:** `/meta` fetches an arbitrary URL server-side — a classic SSRF surface.
+
+**Solution:** `isPrivateHost()` rejects private, loopback, link-local and metadata ranges plus non-80/443 ports; redirects are followed manually (≤3 hops) with the guard re-run per hop and a 4 MB body cap.
+
+**Outcome:** A hostile page cannot bounce the fetch to an internal address; failures return empty metadata, not errors. `worker/src/index.js:42`
+
+### 5. Three-Layer Favicon Cache (performance)
+
+**Problem:** Resolving 4–6 favicon candidates per tile on every boot is the biggest repeated cost of a page opened constantly.
+
+**Solution:** A persisted winner is tried first (one usually cache-hit request), decoded elements are reused across page flips in memory, and failures retry with 5 s backoff.
+
+**Outcome:** Repeat boots resolve each tile with roughly one request instead of a candidate blast. `js/app.js:443`
+
+## Run Locally
+
+Node ≥18 is required for the scripts and the worker; the extension itself is plain script tags — no bundler, no `npm install`, no build step.
+
+```bash
+# extension — zero-config: loads with no .env; sync just reports "cloud off"
+chrome://extensions → Developer mode → Load unpacked → this folder
+
+# optional build helpers
+node scripts/gen-icons.mjs    # regenerate icons/ PNGs (zero deps)
+node scripts/gen-config.mjs   # regenerate js/config.js from .env
+
+# cloud worker — production deploy (binding: R2 bucket "jigar")
+cd worker && wrangler deploy
+```
+
+Zero-config: yes. Without `.env`, the grid still renders from baked defaults plus `links.txt`; cloud sync and the NSFW wallpaper option simply stay off.
+
+## Configuration
+
+| Env var | Required | Effects when set |
 |---|---|---|
-| `h j k l` / arrows | move | grid · bookmarks |
-| `enter` / `o` | open (ctrl/meta = new tab) | grid · bookmarks |
-| `tab` / `shift+tab` | next / previous page | grid |
-| `/` | command bar (url, name, or Google search) | grid |
-| `a` / `a` + `shift` | add shortcut / add bookmark link or folder | grid · bookmarks |
-| `e` `d` | edit · delete (arm + confirm) | grid · bookmarks |
-| `g` / `shift+g` | first / last | grid · bookmarks |
-| `s` | settings drawer | grid |
-| `b` / `shift+b` | open bookmarks | anywhere |
-| `w` `r` | next wallpaper · reload pool | page |
-| `f` / `shift+f` | favourite · favourites as pool | page |
-| `space` / `space space` | save safe wallpaper · apply it | page |
-| `esc` | close anything | everywhere |
+| `R2_WORKER_URL` | ✅ | Enables cloud sync and the `/meta` fallback; unset → sync pill reads "cloud off", grid works locally |
+| `WALLHAVEN_API_KEY` | — | Seeds the drawer key field and unlocks the NSFW purity option; unset → NSFW button disabled (`js/walls.js:948`) |
 
-## Install
-
-1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → this folder
-2. Open a new tab.
-
-First run seeds the grid from `links.txt` (one URL per line — edit or delete it to taste).
-
-## Cloud sync (optional)
-
-The extension works fully offline (`cloud off` in settings). To enable cross-device sync:
-
-1. `cd worker && wrangler deploy` — the Worker fronts an R2 bucket; no credentials ever ship in the extension
-2. `cp .env.example .env` and set `R2_WORKER_URL` to the deployed Worker's URL
-3. `node scripts/gen-config.mjs` — writes `js/config.js` (the URL only)
-4. Reload the extension → the settings sync pill reads `synced`
-
-## Structure
+## Project Structure
 
 ```
-manifest.json   MV3 manifest (newtab override)
-newtab.html     the new tab page itself
-js/app.js       grid, vim keys, settings, modal, sync orchestration
-js/bookmarks.js bookmarks sidebar (Chrome write-through)
-js/walls.js     wallhaven wallpapers + cache
-js/sync.js      Cloudflare Worker client
-css/            theme tokens + page styles
-worker/         Cloudflare Worker (R2 binding), deploy with wrangler
-scripts/        gen-icons + gen-config build helpers
+manifest.json             MV3 manifest; new-tab override, pinned key, CSP
+newtab.html               Static shell; loads the five JS modules in order
+js/app.js                 Core: grid, vim keys, drag-reorder, modal, sync orchestration
+js/bookmarks.js           Bookmarks sidebar — direct chrome.bookmarks editor
+js/walls.js               Wallhaven pool, favourites, safe wallpaper, blob cache
+js/sync.js                Thin worker client (GET/PUT /save)
+js/config.js              Generated runtime config (worker URL, wallhaven key)
+worker/src/index.js       Worker: LWW + seed guard, prev-save rotation, /meta, /backup
+scripts/gen-config.mjs    Regenerates js/config.js from .env
+links.txt                 Optional first-run seed, one URL per line
 ```
 
-## Security
+---
 
-- Every user/cloud/Chrome-supplied string renders via `textContent`; no `eval`, no dynamic HTML, no inline scripts (CSP)
-- Values crossing the cloud boundary are clamped and validated on restore; wallpaper URLs are re-parsed before they touch `background-image`
-- The worker's `/meta` route (server-side title/icon fetch) has an SSRF guard: public http(s) only, private ranges and local hostnames rejected, redirects re-validated per hop
-- **Known limitation:** the worker's `PUT /save` is unauthenticated by design — treat the bucket as public scratch storage (safe for personal use; per-user auth is future work)
+Never lose a save, never lose a favourite, and every tile answers to the keyboard.
 
-## License
+---
 
-MIT © 2026 Firoz Chauhan
+<div align="left">
+  <font face="Aref Ruqaa" size="5">فیروز خان چوہان</font>
+</div>
