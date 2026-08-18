@@ -159,6 +159,8 @@
   var safeSetBtn = document.getElementById('safeSet');
   var safeApplyBtn = document.getElementById('safeApply');
   var safeStatus = document.getElementById('safeStatus');
+  var downloadBtn = document.getElementById('wallDownload');
+  var downloadStatus = document.getElementById('wallDownloadStatus');
   var addInput = document.getElementById('wallAddInput');
   var addBtn = document.getElementById('wallAdd');
   var reloadBtn = document.getElementById('wallReload');
@@ -211,6 +213,30 @@
     return { v: 9, key: state.key, list: state.list, lastRefresh: state.lastRefresh,
       purity: state.purity, category: state.category, apikey: state.apikey,
       favs: state.favs, safe: state.safe };
+  }
+
+  /* favourites are a KEPT list, never derived state — a stale/partial copy of
+     any store must never be able to erase one. Dedupe-union of two lists,
+     first's order preserved, capped at the favourites maximum. */
+  function unionFavs(a, b) {
+    var seen = {}, out = [];
+    var all = (a || []).concat(b || []);
+    for (var i = 0; i < all.length && out.length < FAV_MAX; i++) {
+      var u = all[i];
+      if (isUrl(u) && !seen[u]) { seen[u] = true; out.push(u); }
+    }
+    return out;
+  }
+
+  /* after any adoption or boot, favourites from the incoming doc are unioned
+     in, never replacing what the user already saved */
+  function keepFavs(list) {
+    var merged = unionFavs(state.favs, list);
+    if (merged.length === state.favs.length) return false;
+    state.favs = merged;
+    persistData();
+    renderFavs();
+    return true;
   }
 
   function persistData() {
@@ -274,6 +300,12 @@
       state.apikey = prevKeyOpt;
       state.safe = prevSafe;
     }
+    /* favourites are NEVER replaced by an incoming doc — the incoming list
+       is only unioned in, so a stale/partial mirror (a cloud copy that
+       predates a favourite, a fresh-seed doc, a corrupted slice) can never
+       erase one. A favourite only leaves the list when the user removes it
+       with removeFav. */
+    state.favs = unionFavs(prevFavs, state.favs);
     persistData();
     renderGrid();
     renderFavs();
@@ -604,6 +636,82 @@
     }
   }
 
+  /* ------------------------------------------------------------ download */
+
+  /* the settings drawer's "download current wallpaper" action: save the
+     image currently shown as the background to disk. Served from the cached
+     blob when available (instant, offline-capable); otherwise the bytes are
+     fetched fresh and downloaded — the extension's https host permission
+     keeps CORS out of the way, and if that fails the image is opened in a
+     new tab so it can still be saved by hand. */
+
+  function flashDownload(msg) {
+    if (!downloadStatus) return;
+    downloadStatus.textContent = msg;
+    setTimeout(function () { if (downloadStatus) downloadStatus.textContent = ''; }, 2500);
+  }
+
+  /* a meaningful filename from the wallpaper url — wallhaven and unsplash
+     urls bake the photo id in, so the saved file keeps it */
+  function downloadName(u) {
+    var m = /wallhaven-([a-z0-9]+)\.(jpg|png)$/i.exec(u);
+    if (m) return 'wallhaven-' + m[1] + '.' + m[2].toLowerCase();
+    var um = /photo-(\d+-[0-9a-f]+)/i.exec(u);
+    if (um) return 'glisters-' + um[1] + '.jpg';
+    try {
+      var base = new URL(u).pathname.split('/').filter(Boolean).pop();
+      if (base) return base;
+    } catch (e) { /* fall through */ }
+    return 'glisters-wallpaper-' + new Date().toISOString().slice(0, 10) + '.jpg';
+  }
+
+  function triggerDownload(url, name) {
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { if (a.parentNode) a.parentNode.removeChild(a); }, 2000);
+  }
+
+  function downloadCurrent() {
+    var s = safeWallUrl(state.key);
+    if (!s) {
+      flashDownload('no wallpaper shown to download');
+      return Promise.resolve(false);
+    }
+    var name = downloadName(s);
+    /* instant path: the cached blob URL (kept alive by the pool, so it is
+       NOT revoked here) */
+    if (blobUrls[s]) {
+      triggerDownload(blobUrls[s], name);
+      flashDownload('downloading current wallpaper');
+      return Promise.resolve(true);
+    }
+    return fetch(s).then(function (r) {
+      if (!r.ok) throw new Error('wallpaper download ' + r.status);
+      return r.blob();
+    }).then(function (blob) {
+      var url = URL.createObjectURL(blob);
+      triggerDownload(url, name);
+      /* the download has already grabbed the bytes; give the browser time
+         to finish before freeing the object url */
+      setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) { /* noop */ } }, 60000);
+      flashDownload('downloading current wallpaper');
+      return true;
+    }).catch(function () {
+      /* offline / blocked host — open the image instead so it can be saved */
+      try {
+        var w = window.open(s, '_blank', 'noopener');
+        if (!w) location.assign(s);
+      } catch (e) { location.assign(s); }
+      flashDownload('download failed — opened image in a new tab');
+      return false;
+    });
+  }
+
+  if (downloadBtn) downloadBtn.addEventListener('click', downloadCurrent);
+
   /* every 24 hours: replace the pool with a fresh set and show a new one */
   setInterval(function () { refreshPool(true); }, REFRESH_MS);
 
@@ -932,8 +1040,8 @@
   if (reloadBtn) reloadBtn.addEventListener('click', reload);
 
   /* ---- keys: w cycles to the next wallpaper, r reloads, f favourites the
-        current wallpaper, space saves it as safe and double-space applies
-        it (bare page only) ---- */
+        current wallpaper, shift+D (or d in the drawer) downloads it, space
+        saves it as safe and double-space applies it (bare page only) ---- */
 
   function isVisible(sel) {
     var n = document.querySelector(sel);
@@ -959,16 +1067,25 @@
   }
   document.addEventListener('keydown', function (e) {
     if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
-    if (e.key !== 'w' && e.key !== 'W' && e.key !== 'r' && e.key !== 'R' &&
-        e.key !== 'f' && e.key !== 'F' && e.key !== ' ') return;
     if (e.repeat) return;
     var t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
         t.tagName === 'SELECT' || t.isContentEditable)) return;
     if (isVisible('#modal') || isVisible('#bar')) return;
     var drawer = document.querySelector('#drawer'), bk = document.querySelector('#bk');
-    if (drawer && drawer.classList.contains('open')) return;
+    var drawerOpen = !!(drawer && drawer.classList.contains('open'));
     if (bk && bk.classList.contains('open')) return;
+    /* download: shift+D works anywhere on the page; plain d also works while
+       the settings drawer is open (the button lives there, and grid delete —
+       bare-page d — is inert in drawer mode). */
+    if (e.key === 'D' || (e.key === 'd' && drawerOpen)) {
+      e.preventDefault();
+      downloadCurrent();
+      return;
+    }
+    if (drawerOpen) return;
+    if (e.key !== 'w' && e.key !== 'W' && e.key !== 'r' && e.key !== 'R' &&
+        e.key !== 'f' && e.key !== 'F' && e.key !== ' ') return;
     e.preventDefault();
     if (e.key === 'r' || e.key === 'R') reload();
     else if (e.key === 'F') favPool();
@@ -990,14 +1107,31 @@
   pruneBlobs(state.list);
   prefetchPool();
 
-  /* chrome.storage is the durable mirror; adopt it if localStorage was empty */
-  if (window.chrome && chrome.storage && chrome.storage.local) {
-    try {
-      chrome.storage.local.get(LS_KEY, function (o) {
-        if (o && o[LS_KEY] && !JSON.parse(localStorage.getItem(LS_KEY) || 'null')) adopt(o[LS_KEY]);
-      });
-    } catch (e) { /* noop */ }
+  /* Favourites must survive a stale/corrupt copy of ANY single store: boot
+     unions them across the walls doc and the app doc's walls slice, each in
+     localStorage and chrome.storage — a favourite only disappears if it is
+     gone from every copy at once. The durable chrome.storage walls doc is
+     still adopted wholesale when the fast localStorage path is missing
+     (favs are unioned inside adopt too). */
+  function reconcileFavs() {
+    var add = function (s) { keepFavs(s); };
+    var lsWalls = null, lsApp = null;
+    try { lsWalls = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch (e) { /* noop */ }
+    try { lsApp = JSON.parse(localStorage.getItem('glisters') || 'null'); } catch (e) { /* noop */ }
+    if (lsWalls) add(lsWalls.favs);
+    if (lsApp && lsApp.walls) add(lsApp.walls.favs);
+    if (window.chrome && chrome.storage && chrome.storage.local) {
+      try {
+        chrome.storage.local.get([LS_KEY, 'glisters'], function (o) {
+          if (!o) return;
+          if (o[LS_KEY]) add(o[LS_KEY].favs);
+          if (o['glisters'] && o['glisters'].walls) add(o['glisters'].walls.favs);
+          if (o[LS_KEY] && !JSON.parse(localStorage.getItem(LS_KEY) || 'null')) adopt(o[LS_KEY]);
+        });
+      } catch (e) { /* noop */ }
+    }
   }
+  reconcileFavs();
 
   /* after boot settles: if the pool is older than 24 hours, fetch a fresh
      set right away (so a new tab opened later already shows something new) */
@@ -1030,6 +1164,8 @@
     /* save the current wallpaper as the safe/default wallpaper */
     setSafe: function () { return setSafe(); },
     /* apply the safe wallpaper as the background (if one is set) */
-    applySafe: function () { return applySafe(); }
+    applySafe: function () { return applySafe(); },
+    /* download the currently-applied wallpaper to disk */
+    download: function () { return downloadCurrent(); }
   };
 })();

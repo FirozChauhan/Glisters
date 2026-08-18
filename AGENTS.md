@@ -242,9 +242,9 @@ endpoint`. `req(method, body)`:
 Exposes `window.SYNC = { cfg, push, pull }`. Disabled (rejects) when no worker
 URL is configured.
 
-### 3.7 `js/walls.js` (~1035 lines) — wallpapers
+### 3.7 `js/walls.js` (~1100 lines) — wallpapers
 Sinks to `window.WALLS = { bind, forDoc, restore, next, refresh, reload,
-filter, key, fav, favPool, setSafe, applySafe }`.
+filter, key, fav, favPool, setSafe, applySafe, download }`.
 
 **Source**: Wallhaven keyless API `search?sorting=toplist&topRange=1M&per_page=24`,
 purity/category bitmasks (`100/110/111`, `100/010/001`), optional `&apikey=`.
@@ -279,8 +279,16 @@ urls; `isBuiltin`), reload button (`different:true` — drops current pool first
 
 **Keys handled here** (bare page only, `keydown` guard at `js/walls.js:960`):
 `w` next pool cycle · `r`/`R` reload · `f` favourite current · `F` favourites
-become the pool · `space` single = save current as safe, double-space (within
-350ms window) = apply safe.
+become the pool · `D` download current · `space` single = save current as
+safe, double-space (within 350ms window) = apply safe.
+
+**Download current wallpaper**: the drawer's "Current wallpaper → download"
+button (`WALLS.download()`), the key `D` (shift+d, works anywhere on the
+page), or plain `d` while the settings drawer is open, saves the applied shot
+to disk. It downloads the cached blob URL when the pool is materialized
+(instant, offline-capable), otherwise fetches the bytes fresh; on failure it
+opens the image in a new tab so it can still be saved by hand. The filename
+is derived from the url (wallhaven/unsplash photo ids are preserved).
 
 ### 3.8 `js/bookmarks.js` (~966 lines) — bookmarks sidebar
 Sinks to `window.BOOKMARKS = { bind, forDoc, restore, refreshFromChrome }`.
@@ -412,8 +420,20 @@ Serialize me with `app.doc()`; the cloud worker stores one object at
 Slices are validated by their owners (`normalize` in app.js, `setData`/`adopt`
 in the modules). A missing/stale slice must never erase what the user already
 chose — that is why `adopt()` in walls.js restores the previous state when the
-incoming doc is empty/stale, and bookmarks `adopt()` keeps local state when it
-is newer while still unioning tombstones.
+incoming doc is empty/stale, **unions** the favourites list in rather than ever
+replacing it, and bookmarks `adopt()` keeps local state when it is newer while
+still unioning tombstones.
+
+**Favourites are never replaced — only ever unioned.** `adopt()` merges the
+incoming doc's `favs` into the existing list (dedupe, capped at `FAV_MAX`);
+the only way a favourite leaves the list is `removeFav()`. On boot
+`reconcileFavs()` unions favourites across every surviving copy — the walls
+doc and the app doc's walls slice, each in localStorage and chrome.storage —
+so a stale/corrupt/missing single store can never erase one. A favourite only
+disappears if it is gone from every copy at once (or the user removed it).
+Trade-off, by design: removing a favourite on one device does not propagate
+to other devices' copies until they remove it too — preservation wins over
+removal propagation.
 
 **Conflict semantics**: worker rejects PUTs whose `updatedAt` is older than the
 stored one (409). The client then pulls and adopts the newer doc. This is the
@@ -452,7 +472,7 @@ only `commit()` and calls module hooks; modules never call app.js directly.**
 | `window.CONFIG` | config.js | `{ worker, wallhavenKey, generatedAt }` | app/sync/walls |
 | `window.SYNC` | sync.js | `{ cfg, push(doc)→Promise, pull()→Promise }` | app.js |
 | `window.BOOKMARKS` | bookmarks.js | `{ bind(cb), forDoc(), restore(obj), refreshFromChrome() }` | app.js |
-| `window.WALLS` | walls.js | `{ bind(cb), forDoc(), restore(obj), next, refresh, reload, filter, key, fav, favPool, setSafe, applySafe }` | app.js |
+| `window.WALLS` | walls.js | `{ bind(cb), forDoc(), restore(obj), next, refresh, reload, filter, key, fav, favPool, setSafe, applySafe, download }` | app.js |
 
 `bind(commit)` hands the app's `commit()` to a module so any module-side change
 triggers `persistLocal` + cloud push on the whole doc. `forDoc()` supplies the
@@ -530,6 +550,7 @@ so the async merge window can't resurrect them).
 | `w` | — | — | next wallpaper |
 | `r` / `R` | — | — | reload pool |
 | `f` / `F` | — | — | favourite / favourites-pool |
+| `D` (or `d` in drawer) | — | — | download current wallpaper |
 | `space` (×1/×2) | — | — | save safe / apply safe |
 | `esc` | close anything | close | — |
 
