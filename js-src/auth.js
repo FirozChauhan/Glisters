@@ -201,16 +201,48 @@
     });
   }
 
-  /* ===== raw API call with dev browser token ===== */
+  /* ===== raw API call with dev browser token =====
+     Mirrors ClerkJS's FAPI client exactly:
+     - bodies are sent application/x-www-form-urlencoded (the FAPI parses
+       form params; JSON bodies fail validation on some endpoints)
+     - PATCH is sent as POST with ?_method=PATCH (form encoding can't PATCH)
+     - __clerk_api_version / _clerk_js_version query params
+     - a 401 (expired dev browser token) mints a fresh one and retries once */
 
-  function apiFetch(path, opts) {
+  function apiFetch(path, opts, _retried) {
     opts = opts || {};
     return ensureDbJwt().then(function (token) {
-      var url = API + path + '?__clerk_db_jwt=' + encodeURIComponent(token || '');
+      var method = opts.method || 'GET';
+      var url = API + path + '?__clerk_db_jwt=' + encodeURIComponent(token || '')
+        + '&__clerk_api_version=2026-05-12&_clerk_js_version=6.29.2';
+      if (method !== 'GET' && method !== 'POST') {
+        url += '&_method=' + encodeURIComponent(method);
+        method = 'POST';
+      }
+      var headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+      var body = null;
+      if (opts.body) {
+        var params = new URLSearchParams();
+        Object.keys(opts.body).forEach(function (k) {
+          var v = opts.body[k];
+          if (v !== undefined && v !== null) params.append(k, String(v));
+        });
+        body = params.toString();
+      }
       return fetch(url, {
-        method: opts.method || 'GET',
-        headers: opts.headers || { 'Content-Type': 'application/json' },
-        body: opts.body || undefined
+        method: method,
+        headers: headers,
+        body: body
+      }).then(function (resp) {
+        /* expired/invalid dev browser token → mint a fresh one, retry once */
+        if (resp.status === 401 && !_retried) {
+          dbJwt = null;
+          storeRemove(DBJWT_KEY);
+          return fetchDbJwt().then(function () {
+            return apiFetch(path, opts, true);
+          });
+        }
+        return resp;
       });
     });
   }
@@ -257,12 +289,14 @@
 
   function refreshToken() {
     if (!authStore.jwt || !authStore.sid) return Promise.reject(new Error('no session'));
-    return fetch(API + '/v1/client/sessions/' + authStore.sid + '/tokens?__clerk_db_jwt=' + encodeURIComponent(dbJwt || ''), {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + authStore.jwt }
-    }).then(function (r) {
-      if (!r.ok) return Promise.reject(new Error('refresh failed'));
-      return r.json();
+    return ensureDbJwt().then(function (token) {
+      return fetch(API + '/v1/client/sessions/' + authStore.sid + '/tokens?__clerk_db_jwt=' + encodeURIComponent(token || ''), {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + authStore.jwt }
+      }).then(function (r) {
+        if (!r.ok) return Promise.reject(new Error('refresh failed'));
+        return r.json();
+      });
     }).then(function (d) {
       var jwt = d && (d.jwt || (d.response && d.response.jwt));
       if (!jwt) throw new Error('no jwt in refresh response');
@@ -446,7 +480,7 @@
   function doSignIn(email, password) {
     return apiFetch('/v1/client/sign_ins', {
       method: 'POST',
-      body: JSON.stringify({ identifier: email, password: password })
+      body: { identifier: email, password: password }
     }).then(function (r) { return r.json(); }).then(function (d) {
       var resp = d.response || d;
       if (d.errors && d.errors.length) {
@@ -459,7 +493,7 @@
         /* two-step flow: prepare first factor with password */
         return apiFetch('/v1/client/sign_ins/' + resp.id + '/prepare_first_factor', {
           method: 'POST',
-          body: JSON.stringify({ strategy: 'password', password: password })
+          body: { strategy: 'password', password: password }
         }).then(function (r2) { return r2.json(); }).then(function (d2) {
           var r2resp = d2.response || d2;
           if (d2.errors && d2.errors.length) {
@@ -537,7 +571,7 @@
     return p.then(function () {
       return apiFetch('/v1/client/sign_ups', {
         method: 'POST',
-        body: JSON.stringify(body)
+        body: body
       });
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (d.errors && d.errors.length) {
@@ -549,7 +583,7 @@
       /* make sure the email code is sent (create may not auto-send it) */
       return apiFetch('/v1/client/sign_ups/' + signUpId + '/prepare_verification', {
         method: 'POST',
-        body: JSON.stringify({ strategy: 'email_code' })
+        body: { strategy: 'email_code' }
       }).then(function (r2) { return r2.json(); }).then(function (d2) {
         if (d2.errors && d2.errors.length) {
           /* non-fatal: some setups auto-send the code on create */
@@ -766,7 +800,7 @@
     /* step 1: verify email code — path is /client/sign_ups/{id}/attempt_verification */
     return apiFetch('/v1/client/sign_ups/' + signUpId + '/attempt_verification', {
       method: 'POST',
-      body: JSON.stringify({ strategy: 'email_code', code: code })
+      body: { strategy: 'email_code', code: code }
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (d.errors && d.errors.length) {
         throw new Error(d.errors[0].long_message || d.errors[0].message || 'Verification failed');
@@ -790,7 +824,7 @@
       return patchP.then(function () {
         return apiFetch('/v1/client/sign_ups/' + signUpId, {
           method: 'PATCH',
-          body: JSON.stringify(patchBody)
+          body: patchBody
         });
       });
     }).then(function (r) { return r.json(); }).then(function (d) {
