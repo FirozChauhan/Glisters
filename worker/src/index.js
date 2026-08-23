@@ -36,7 +36,7 @@
    in first gets the old personal save; every later sign-in starts fresh.
 --------------------------------------------------------------------------- */
 
-import { createClerkClient } from '@clerk/backend';
+import { createClerkClient, verifyToken } from '@clerk/backend';
 
 const LEGACY_KEY = 'Glisters/save.json';
 const LEGACY_CLAIMED = 'Glisters/legacy-claimed.json';
@@ -51,7 +51,8 @@ const CORS = {
 
 let clerkClient = null;
 function clerk(env) {
-  /* constructed lazily per isolate; verifyToken fetches + caches JWKS */
+  /* constructed lazily per isolate (currently only used for the JWKS
+     cache that verifyToken shares) */
   if (!clerkClient) clerkClient = createClerkClient({ secretKey: env.CLERK_SECRET_KEY || '' });
   return clerkClient;
 }
@@ -70,7 +71,12 @@ async function authUser(request, env) {
   const m = /^Bearer\s+(\S+)$/i.exec(h);
   if (!m) return null;
   try {
-    const payload = await clerk(env).verifyToken(m[1]);
+    /* NOTE: createClerkClient() has NO verifyToken method — that's a top-level
+       export. Calling client.verifyToken throws TypeError for every request,
+       which the catch turned into a silent 401 for VALID tokens (the classic
+       'sign in to sync' after a successful sign-in). Pass the secretKey so the
+       JWKS is derived from the right instance. */
+    const payload = await verifyToken(m[1], { secretKey: env.CLERK_SECRET_KEY || '' });
     return (payload && payload.sub) || null;
   } catch (e) {
     return null;
