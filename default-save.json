@@ -64,10 +64,6 @@
     "drWidth": 500,
     "mono": false,
     "wallMono": false,
-    "blur": 0,
-    "sig": "فیروز خان چوہان",
-    "sigFont": "ruqaa",
-    "sigSize": 27,
-    "sigColor": "#f5f5f5"
+    "blur": 0
   }
 }
