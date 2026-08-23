@@ -73,13 +73,17 @@
   var signUpId = null;              /* current sign-up id (during sign-up flow) */
   var verifyEmail = null;           /* email being verified */
   var _tempPassword = null;         /* password temporarily stored during sign-up flow */
+  var signInId = null;              /* current sign-in id (during device-trust / 2FA verification) */
+  var signInTrustStrategy = null;   /* second-factor strategy: email_code | phone_code | totp */
+  var signInPassword = null;        /* sign-in password saved for re-try after trust established */
+  var verifyPurpose = 'signup';     /* 'signup' | 'signin' — which flow the verify UI belongs to */
 
   /* ---- UI element refs (populated on first openOverlay) ---- */
   var overlay, closeBtn, tabSignIn, tabSignUp;
   var signInForm, signUpForm, verifyForm;
   var signInEmail, signInPass, signInSubmit;
   var signUpEmail, signUpPass, signUpConfirm, signUpSubmit, captchaEl;
-  var verifyCode, verifySubmit, verifyEmailEl;
+  var verifyCode, verifySubmit, verifyHintEl;
   var resendLink, signUpHintLink, signInPasswordHint;
   var authError, authNote;
 
@@ -515,6 +519,12 @@
       if (resp.status === 'complete') {
         return extractSession(d);
       }
+      if (resp.status === 'needs_client_trust' || resp.status === 'needs_second_factor') {
+        /* Client Trust (device verification) or real 2FA — the password was
+           accepted but the client isn't trusted yet. Send a code and collect
+           it through the verify UI (see beginSecondFactor). */
+        return beginSecondFactor(resp, email, password);
+      }
       if (resp.status === 'needs_first_factor') {
         /* two-step flow: prepare first factor with password */
         return apiFetch('/v1/client/sign_ins/' + resp.id + '/prepare_first_factor', {
@@ -528,11 +538,100 @@
           if (r2resp.status === 'complete') {
             return extractSession(d2);
           }
+          if (r2resp.status === 'needs_client_trust' || r2resp.status === 'needs_second_factor') {
+            return beginSecondFactor(r2resp, email, password);
+          }
           throw new Error('Sign-in returned unexpected status: ' + r2resp.status);
         });
       }
       if (resp.status === 'needs_identifier') {
         return { type: 'no_account' };
+      }
+      throw new Error('Sign-in returned unexpected status: ' + resp.status);
+    });
+  }
+
+  /* ===== device trust / second factor =====
+     The instance has Client Trust (anti-credential-stuffing) enabled, so a
+     password sign-in from an untrusted client returns needs_client_trust
+     (or needs_second_factor for real 2FA) instead of completing. The
+     password is already verified — the client just needs to be trusted by
+     proving possession of the email/phone. Flow (mirrors ClerkJS mfa):
+       1. prepare_second_factor({strategy}) → sends a code
+       2. user enters it in the shared verify UI
+       3. attempt_second_factor({strategy, code}) → trust established,
+          status becomes 'complete' and the session is created. */
+
+  function beginSecondFactor(resp, email, password) {
+    var strategies = [];
+    var src = resp.supported_second_factors || resp.allowed_factor_two_strategies || [];
+    for (var i = 0; i < src.length; i++) {
+      var s = src[i];
+      if (typeof s === 'string') strategies.push(s);
+      else if (s && s.strategy) strategies.push(s.strategy);
+    }
+    /* client_trust_state may hint at the factor when the list is empty */
+    var cts = resp.client_trust_state;
+    var strategy = null;
+    if (typeof cts === 'string') strategy = cts;
+    else if (cts && cts.strategy) strategy = cts.strategy;
+    if (!strategy) {
+      if (strategies.indexOf('email_code') >= 0) strategy = 'email_code';
+      else if (strategies.indexOf('phone_code') >= 0) strategy = 'phone_code';
+      else if (strategies.indexOf('totp') >= 0) strategy = 'totp';
+      else if (strategies.length) strategy = strategies[0];
+    }
+    if (!strategy) strategy = 'email_code'; /* this instance's email verification strategy */
+    signInId = resp.id;
+    signInTrustStrategy = strategy;
+    signInPassword = password || null;
+    verifyPurpose = 'signin';
+    return apiFetch('/v1/client/sign_ins/' + resp.id + '/prepare_second_factor', {
+      method: 'POST',
+      body: { strategy: strategy }
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.errors && d.errors.length) {
+        throw new Error(d.errors[0].long_message || d.errors[0].message || 'Failed to send verification code');
+      }
+      if (strategy === 'totp') {
+        showVerifyForm(email, 'Enter the code from your authenticator app.');
+      } else if (strategy === 'phone_code') {
+        showVerifyForm(email, 'We texted a verification code to your phone.');
+      } else {
+        showVerifyForm(email, 'We emailed a verification code to ' + email + '.');
+      }
+      return { type: 'verify' };
+    });
+  }
+
+  function attemptTrustCode(code) {
+    if (!signInId) return Promise.reject(new Error('No sign-in in progress'));
+    return apiFetch('/v1/client/sign_ins/' + signInId + '/attempt_second_factor', {
+      method: 'POST',
+      body: { strategy: signInTrustStrategy, code: code }
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.errors && d.errors.length) {
+        throw new Error(d.errors[0].long_message || d.errors[0].message || 'Verification failed');
+      }
+      var resp = d.response || d;
+      if (resp.status === 'complete' || (d.client && d.client.sessions && d.client.sessions.length)) {
+        return extractSession(d);
+      }
+      if (resp.status === 'needs_first_factor' && signInPassword) {
+        /* trust established — now finish the password first factor */
+        return apiFetch('/v1/client/sign_ins/' + signInId + '/prepare_first_factor', {
+          method: 'POST',
+          body: { strategy: 'password', password: signInPassword }
+        }).then(function (r2) { return r2.json(); }).then(function (d2) {
+          if (d2.errors && d2.errors.length) {
+            throw new Error(d2.errors[0].long_message || d2.errors[0].message || 'Sign-in failed');
+          }
+          var r2resp = d2.response || d2;
+          if (r2resp.status === 'complete' || (d2.client && d2.client.sessions && d2.client.sessions.length)) {
+            return extractSession(d2);
+          }
+          throw new Error('Sign-in returned unexpected status: ' + r2resp.status);
+        });
       }
       throw new Error('Sign-in returned unexpected status: ' + resp.status);
     });
@@ -566,6 +665,15 @@
   }
 
   function finishSession(sess, jwt) {
+    /* DEBUG: capture the session JWT + claims so we can test worker
+       verification directly. Remove once verified end-to-end. */
+    try {
+      var p = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      console.log('[auth] session JWT: ' + jwt);
+      console.log('[auth] claims iss=' + p.iss + ' sub=' + p.sub + ' exp=' + p.exp + ' iat=' + p.iat + ' nbf=' + p.nbf + ' azp=' + (p.azp || '') + ' sid=' + (p.sid || ''));
+    } catch (e) {
+      console.log('[auth] session JWT (undecodable): ' + jwt);
+    }
     persistAuth(jwt, sess.id, '');
     api.isSignedIn = true;
     emit();
@@ -689,7 +797,7 @@
     captchaEl = document.getElementById('authCaptcha');
     verifyCode = document.getElementById('authVerifyCode');
     verifySubmit = document.getElementById('authVerifySubmit');
-    verifyEmailEl = document.getElementById('authVerifyEmail');
+    verifyHintEl = document.getElementById('authVerifyHint');
     resendLink = document.getElementById('authResend');
     signUpHintLink = document.getElementById('authGoSignUp');
     authError = document.getElementById('authError');
@@ -714,6 +822,10 @@
     overlay.hidden = true;
     signUpId = null;
     verifyEmail = null;
+    verifyPurpose = 'signup';
+    signInId = null;
+    signInTrustStrategy = null;
+    signInPassword = null;
     destroyTurnstile();
     /* reset forms */
     if (signInForm) { signInForm.reset(); signInForm.hidden = false; }
@@ -724,6 +836,10 @@
   }
 
   function showSignInForm() {
+    verifyPurpose = 'signup';
+    signInId = null;
+    signInTrustStrategy = null;
+    signInPassword = null;
     if (signInForm) signInForm.hidden = false;
     if (signUpForm) signUpForm.hidden = true;
     if (verifyForm) verifyForm.hidden = true;
@@ -750,20 +866,32 @@
     if (captchaRequired) ensureCaptchaFrame();
   }
 
-  function showVerifyForm(email) {
+  function showVerifyForm(email, hint) {
     if (signInForm) signInForm.hidden = true;
     if (signUpForm) signUpForm.hidden = true;
     if (verifyForm) verifyForm.hidden = false;
     if (captchaEl) captchaEl.hidden = !captchaRequired;
     if (signUpHintLink) signUpHintLink.hidden = true;
-    if (verifyEmailEl) verifyEmailEl.textContent = email;
-    if (tabSignIn) tabSignIn.className = 'auth-tab';
-    if (tabSignUp) tabSignUp.className = 'auth-tab active';
+    if (verifyHintEl) {
+      verifyHintEl.textContent = hint || ('We emailed a code to ' + email + '.');
+    }
+    /* no resend for authenticator-app codes */
+    if (resendLink) {
+      resendLink.closest('.auth-hint').style.display =
+        (verifyPurpose === 'signin' && signInTrustStrategy === 'totp') ? 'none' : '';
+    }
+    /* during sign-in trust verification, keep the Sign in tab active */
+    if (verifyPurpose !== 'signin') {
+      if (tabSignIn) tabSignIn.className = 'auth-tab';
+      if (tabSignUp) tabSignUp.className = 'auth-tab active';
+    }
     destroyTurnstile();
     captchaToken = null; /* reset so sign-up step 2 can re-acquire */
     hideError();
     hideNote();
-    showNote('A verification code was sent to ' + email + '.');
+    if (verifyPurpose !== 'signin') {
+      showNote('A verification code was sent to ' + email + '.');
+    }
     setTimeout(function () { if (verifyCode) verifyCode.focus(); }, 100);
   }
 
@@ -898,14 +1026,18 @@
       });
     });
 
-    /* verification form */
+    /* verification form — shared by sign-up email verification and
+       sign-in device-trust / 2FA; branch on verifyPurpose */
     if (verifyForm) verifyForm.addEventListener('submit', function (e) {
       e.preventDefault();
       hideError();
       var code = verifyCode.value.trim();
       if (!code) { showError('Enter the verification code.'); return; }
       setBusy(verifyForm, true);
-      setPasswordAndComplete(code, _tempPassword).then(function () {
+      var p = verifyPurpose === 'signin'
+        ? attemptTrustCode(code)
+        : setPasswordAndComplete(code, _tempPassword);
+      p.then(function () {
         _tempPassword = null;
       }).catch(function (err) {
         setBusy(verifyForm, false);
@@ -913,11 +1045,29 @@
       });
     });
 
-    /* resend code link */
+    /* resend code link — works for both sign-up email codes and sign-in
+       device-trust / 2FA codes */
     if (resendLink) resendLink.addEventListener('click', function (e) {
       e.preventDefault();
-      if (!signUpId) return;
       hideError();
+      if (verifyPurpose === 'signin') {
+        if (!signInId || !signInTrustStrategy) return;
+        showNote('Sending a new code…');
+        apiFetch('/v1/client/sign_ins/' + signInId + '/prepare_second_factor', {
+          method: 'POST',
+          body: { strategy: signInTrustStrategy }
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d.errors && d.errors.length) {
+            showError(d.errors[0].long_message || 'Failed to send a new code');
+          } else {
+            showNote('A new code was sent.');
+          }
+        }).catch(function (err) {
+          showError(err.message || 'Failed to send code');
+        });
+        return;
+      }
+      if (!signUpId) return;
       showNote('Sending a new code…');
       apiFetch('/v1/client/sign_ups/' + signUpId + '/prepare_verification', {
         method: 'POST',

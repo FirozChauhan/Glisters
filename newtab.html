@@ -387,9 +387,9 @@
     <!-- captcha stays outside the forms so a fresh token can render while the verify step is shown -->
     <div id="authCaptcha" hidden></div>
 
-    <!-- verification code step -->
+    <!-- verification code step (shared by sign-up email verification AND sign-in device-trust / 2FA) -->
     <form class="auth-form" id="authVerifyForm" novalidate hidden>
-      <p class="auth-verify-hint">We emailed a code to <b id="authVerifyEmail"></b>.</p>
+      <p class="auth-verify-hint" id="authVerifyHint"></p>
       <label class="auth-field"><span>code</span><input type="text" id="authVerifyCode" placeholder="123456" autocomplete="one-time-code" inputmode="numeric"></label>
       <button type="submit" class="auth-submit" id="authVerifySubmit">Verify</button>
       <p class="auth-hint"><a href="#" id="authResend">Resend code</a></p>
