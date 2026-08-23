@@ -580,7 +580,16 @@
       var resp = d.response || d;
       signUpId = resp.id;
       verifyEmail = email;
-      /* make sure the email code is sent (create may not auto-send it) */
+      /* create with strategy:'email_code' auto-sends the code (the response
+         already has a pending email verification). Only call prepare_verification
+         when the create did NOT send one — otherwise the user gets two codes. */
+      var emailVer = resp.verifications && resp.verifications.email_address;
+      var codePending = emailVer && emailVer.status === 'unverified' &&
+        (emailVer.next_action === 'needs_attempt' || emailVer.next_action === 'needs_prepare');
+      if (codePending) {
+        showVerifyForm(email);
+        return true;
+      }
       return apiFetch('/v1/client/sign_ups/' + signUpId + '/prepare_verification', {
         method: 'POST',
         body: { strategy: 'email_code' }
