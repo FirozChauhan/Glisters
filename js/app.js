@@ -12,12 +12,13 @@
   function signedIn() { var A = window.AUTH; return !!(A && A.enabled && A.ready && A.isSignedIn); }
 
   var STORE_KEY = 'glisters';
-  var SEED_FLAG_KEY = 'glisters-seed'; /* persists that local state came from links.txt */
-  var SEED_VERSION = 2; /* bump when links.txt should re-seed existing installs */
+  var SEED_FLAG_KEY = 'glisters-seed'; /* persists that local state came from a seed (default-save.json / links.txt) */
+  var SEED_VERSION = 2; /* bump when default-save.json / links.txt should re-seed existing installs */
 
   /* the default save: a fresh/wiped install renders THESE links on first
-     paint — no fetch, no cloud, no blank grid. links.txt still overrides
-     (edit it to change what a future fresh install seeds). */
+     paint — no fetch, no cloud, no blank grid. default-save.json (popular
+     websites template) then links.txt still override — edit them to change
+     what a future fresh install seeds. */
   var DEFAULT_SITES = [
     { name: 'Youtube', url: 'https://youtube.com' },
     { name: 'BlackFlag', url: 'https://docs.google.com/spreadsheets/d/177cnuV9QlHmO6bAGdO1xgN04xnQJCAuLOcj0ckmy4Yk/edit?gid=1167406126#gid=1167406126' },
@@ -197,13 +198,33 @@
     return out;
   }
 
-  function loadLinks() {
-    return fetch('links.txt', { cache: 'no-store' })
+  /* seed source order: default-save.json (popular websites template) →
+     links.txt (one URL per line) → baked DEFAULT_SITES. default-save.json
+     wins because it is a complete doc (sites + settings); links.txt is the
+     legacy override; the caller's .catch keeps the baked defaults. */
+  function loadSeed() {
+    return fetch('default-save.json', { cache: 'no-store' })
       .then(function (r) {
-        if (!r.ok) throw new Error('links.txt: ' + r.status);
-        return r.text();
+        if (!r.ok) throw new Error('default-save.json: ' + r.status);
+        return r.json();
       })
-      .then(parseLinks);
+      .then(function (doc) {
+        var s = normalize(doc);
+        if (!s || !Array.isArray(s.sites) || !s.sites.length) throw new Error('default-save.json: empty');
+        return s;
+      })
+      .catch(function () {
+        return fetch('links.txt', { cache: 'no-store' })
+          .then(function (r) {
+            if (!r.ok) throw new Error('links.txt: ' + r.status);
+            return r.text();
+          })
+          .then(function (text) {
+            var links = parseLinks(text);
+            if (!links.length) throw new Error('links.txt: empty');
+            return { version: SEED_VERSION, updatedAt: 0, sites: links, settings: Object.assign({}, DEFAULTS.settings) };
+          });
+      });
   }
 
   function normalize(o) {
@@ -1944,6 +1965,52 @@
     });
   });
 
+  /* import a save from a local JSON file — the mirror of the download
+     button. The file is normalized through the same cloud-safety gate as
+     any remote doc, and the outgoing save is stashed first so a bad import
+     is undoable via 'restore previous'. updatedAt is bumped to now so the
+     loaded save wins the LWW conflict on the next push. */
+  $('#backupLoad').addEventListener('click', function () {
+    var input = $('#backupLoadInput');
+    if (input) input.click();
+  });
+  $('#backupLoadInput').addEventListener('change', function () {
+    var input = this;
+    var f = input.files && input.files[0];
+    input.value = ''; /* allow re-selecting the same file */
+    if (!f) return;
+    var fr = new FileReader();
+    fr.onload = function () {
+      var obj = null;
+      try { obj = JSON.parse(fr.result); } catch (e) { /* not JSON */ }
+      var norm = obj ? normalize(obj) : null;
+      if (!norm || !Array.isArray(norm.sites)) {
+        setSyncStatus('error', 'invalid save file');
+        return;
+      }
+      if (!confirm('Replace the current save with this file?')) return;
+      stashPrevious(doc());
+      state = norm;
+      state.updatedAt = Date.now();
+      seededFromLinks = false;
+      clearSeedFlag();
+      renderAll();
+      persistLocal();
+      if (window.BOOKMARKS) window.BOOKMARKS.restore(state.bookmarks);
+      if (window.WALLS) window.WALLS.restore(state.walls);
+      scheduleCloud();
+      setSyncStatus('synced', 'save loaded');
+    };
+    fr.readAsText(f);
+  });
+
+  /* force an immediate push of the local doc to the cloud — bypasses the
+     debounced auto-sync so a user can push local changes on demand */
+  $('#backupPush').addEventListener('click', function () {
+    if (!signedIn()) { setSyncStatus('auth', 'sign in to sync'); return; }
+    pushCloud();
+  });
+
   /* ------------------------------------------------------------------ sync */
 
   function setSyncStatus(kind, text) {
@@ -2274,8 +2341,8 @@
           proceed();
           return;
         }
-      loadLinks().then(function (links) {
-        state.sites = links;
+      loadSeed().then(function (seedDoc) {
+        state = seedDoc;
         state.updatedAt = Date.now();
         seededFromLinks = true;
         persistSeedFlag();

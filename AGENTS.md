@@ -51,7 +51,8 @@ icons/  (generated 16/48/128 PNGs)
 scripts/gen-config.mjs / gen-auth.mjs / gen-icons.mjs  (Node build helpers)
 js-src/auth.js  (auth SOURCE — raw Clerk REST API, no SDK; copied to js/auth.js)
 worker/  (Cloudflare Worker → R2 bucket "SAVE")
-links.txt  (optional first-run seed, one URL per line)
+default-save.json  (popular-websites seed template, one full save doc)
+links.txt  (legacy first-run seed override, one URL per line)
 ```
 
 ---
@@ -153,13 +154,16 @@ drawer, drag-reorder, page flips, and orchestrates the other modules.
 - `commit(opts)` — stamps `updatedAt`, re-renders (unless `noRender`),
   persists, and schedules a cloud push (unless `noCloud`).
 
-**links.txt seeding**: On a fresh install (`needSeed`), `state` starts from
-`DEFAULT_SITES` (the baked default save) so the grid is never blank. If a
-stored doc is unrecoverable it then fetches `links.txt` (`loadLinks()`), which
-overrides the baked list — edit `links.txt` to change what a future fresh
-install seeds. Derives display names via `nameForUrl()` (title-case map
-`TITLE_CASE`, `prettyBase`, Google-product detection), dedupes names. Sets
-`seededFromLinks` **and persists it** (`glisters-seed` in localStorage +
+**default-save.json seeding**: On a fresh install (`needSeed`), `state` starts
+from `DEFAULT_SITES` (the baked default save) so the grid is never blank. If a
+stored doc is unrecoverable it then fetches `default-save.json`
+(`loadSeed()`), a complete doc with a curated list of popular websites (48
+sites + default settings) — edit it to change what a future fresh install
+seeds. It is run through `normalize()` like any cloud doc. `loadSeed()` falls
+back to `links.txt` (one URL per line, the legacy override), then to the
+baked `DEFAULT_SITES`. Derives display names via `nameForUrl()` (title-case
+map `TITLE_CASE`, `prettyBase`, Google-product detection), dedupes names.
+Sets `seededFromLinks` **and persists it** (`glisters-seed` in localStorage +
 chrome.storage) so a reload can never mistake the seed for real local data —
 that was the clobber vector that let a wiped install's seed overwrite the
 cloud save via LWW.
@@ -466,7 +470,15 @@ Generates `icons/icon{16,48,128}.png` with a hand-rolled PNG encoder (zlib
 deflate + CRC32): dark square, thin light frame, hollow centre. Zero image
 dependencies. Run `node scripts/gen-icons.mjs`.
 
-### 3.14 `links.txt`First-run seed override, one URL per line (the repo ships the user's 46 links). A fresh install seeds from the baked-in `DEFAULT_SITES` in app.js on first paint; `links.txt` overrides that list when it loads — edit it to change what a future fresh install seeds. An absent file falls back to the baked defaults (no more silent empty grid). Names are derived at seed time. Bump `SEED_VERSION` in app.js to re-seed existing installs.
+### 3.14 `default-save.json` / `links.txt`
+First-run seed, in priority order: `default-save.json` (a complete save doc
+with ~48 popular websites + default settings — the primary template) →
+`links.txt` (one URL per line, legacy override) → the baked-in
+`DEFAULT_SITES` in app.js. A fresh install renders the baked defaults on
+first paint, then `loadSeed()` fetches `default-save.json` (normalized) and
+falls back down the chain. An absent/invalid file falls back to the baked
+defaults (no more silent empty grid). Names are derived at seed time. Bump
+`SEED_VERSION` in app.js to re-seed existing installs.
 
 ### 3.15 `icons/`
 16/48/128 PNGs (generated). Referenced in manifest + visual only.
@@ -627,6 +639,10 @@ the user clicks/tabs in.
   `glisters-previous` (localStorage + chrome.storage) so a bad adoption is
   undoable via settings → backup → restore previous.
 - Settings → backup → download saves the whole doc as a JSON file.
+- Settings → backup → load… imports a local JSON file (normalized, confirmed,
+  stashed, bumped `updatedAt` to now).
+- Settings → backup → push local forces an immediate cloud push (bypasses
+  the 1.3s debounce).
 
 ### Favicon for a tile
 `tileEl` → cached decoded element? reuse. Else `persistedIcons[key]` (single

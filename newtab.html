@@ -298,7 +298,10 @@
         <span class="set-name">Backup</span>
         <div class="backup-btns">
           <button type="button" class="btn-secondary" id="backupDownload" title="download the whole save (shortcuts + settings + bookmarks + wallpapers) as a JSON file">download</button>
+          <button type="button" class="btn-secondary" id="backupLoad" title="import a save from a JSON file — replaces the current save">load…</button>
+          <button type="button" class="btn-secondary" id="backupPush" title="push the current local save to the cloud now">push local</button>
           <button type="button" class="btn-secondary" id="restorePrevious" title="undo the last cloud sync — restore the save that was current before it">restore previous</button>
+          <input type="file" id="backupLoadInput" accept="application/json,.json" hidden>
         </div>
       </div>
       <div class="set-row storage-row">
