@@ -72,7 +72,7 @@
     version: SEED_VERSION,
     updatedAt: 0,
     sites: DEFAULT_SITES.slice(),
-    settings: { iconSize: 68, colGap: 28, rowGap: 28, cols: 8, rows: 3, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 500, drWidth: 500, mono: false, wallMono: false, blur: 0, sig: 'فیروز خان چوہان' }
+    settings: { iconSize: 68, colGap: 28, rowGap: 28, cols: 8, rows: 3, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 500, drWidth: 500, mono: false, wallMono: false, blur: 0, sig: 'فیروز خان چوہان', sigFont: 'ruqaa', sigSize: 27, sigColor: '#f5f5f5' }
   };
 
   var saved = readLocal();
@@ -242,6 +242,11 @@
       s.mono = o.settings.mono === true;
       s.wallMono = o.settings.wallMono === true;
       s.sig = typeof o.settings.sig === 'string' ? String(o.settings.sig).slice(0, 80) : d.sig;
+      s.sigFont = ['ruqaa', 'sans', 'mono', 'serif'].indexOf(o.settings.sigFont) !== -1 ? o.settings.sigFont : d.sigFont;
+      s.sigSize = typeof o.settings.sigSize === 'number' && isFinite(o.settings.sigSize)
+        ? Math.max(12, Math.min(96, o.settings.sigSize)) : d.sigSize;
+      s.sigColor = typeof o.settings.sigColor === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(o.settings.sigColor)
+        ? o.settings.sigColor : d.sigColor;
     } else {
       s = Object.assign({}, d);
     }
@@ -866,12 +871,24 @@
 
   /* bottom-right signature — plain textContent (user/cloud-supplied), with
      the bidi direction flipped only when the text is actually RTL */
+  var SIG_FONTS = {
+    ruqaa: { family: 'var(--font-ruqaa)', weight: 700 },
+    sans: { family: 'var(--font-sans)', weight: 700 },
+    mono: { family: 'var(--font-mono)', weight: 600 },
+    serif: { family: 'Georgia, "Times New Roman", serif', weight: 600 }
+  };
   function applySig() {
     var sig = $('#pageSig');
     if (!sig) return;
-    var t = state.settings.sig == null ? '' : String(state.settings.sig).slice(0, 80);
+    var s = state.settings;
+    var t = s.sig == null ? '' : String(s.sig).slice(0, 80);
     sig.textContent = t;
     sig.setAttribute('dir', /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(t) ? 'rtl' : 'ltr');
+    var f = SIG_FONTS[s.sigFont] || SIG_FONTS.ruqaa;
+    sig.style.fontFamily = f.family;
+    sig.style.fontWeight = String(f.weight);
+    sig.style.fontSize = ((typeof s.sigSize === 'number' && isFinite(s.sigSize)) ? s.sigSize : 27) + 'px';
+    sig.style.color = s.sigColor || '#f5f5f5';
   }
 
   function setFocused(i) {
@@ -1832,6 +1849,15 @@
     if (wallMono && wallMono.checked !== s.wallMono) wallMono.checked = s.wallMono;
     var sigIn = $('#set-sig');
     if (sigIn && sigIn.value !== (s.sig || '')) sigIn.value = s.sig || '';
+    setRangeVal('sigSize', s.sigSize);
+    var sc = $('#set-sigColor');
+    if (sc && sc.value !== (s.sigColor || '#f5f5f5')) sc.value = s.sigColor || '#f5f5f5';
+    var scv = $('#val-sigColor');
+    if (scv) scv.textContent = s.sigColor || '#f5f5f5';
+    var sfBtns = document.querySelectorAll('[data-sigfont]');
+    for (var si = 0; si < sfBtns.length; si++) {
+      sfBtns[si].classList.toggle('selected', sfBtns[si].getAttribute('data-sigfont') === s.sigFont);
+    }
     syncAccountUI();
   }
 
@@ -1849,6 +1875,7 @@
     state.settings[k] = v;
     setRangeVal(k, v);
     applyCssVars();
+    if (k === 'sigSize') applySig();
     if (cellCapacity() !== prevCap) {
       clampPage();
       if (state.sites.length === 0) focused = -1;
@@ -1865,7 +1892,7 @@
     settingTimer = setTimeout(function () { commit({ noRender: true }); }, 250);
   }
 
-  ['iconSize', 'colGap', 'rowGap', 'cols', 'rows', 'bkWidth', 'drWidth', 'blur', 'labelOp'].forEach(function (k) {
+  ['iconSize', 'colGap', 'rowGap', 'cols', 'rows', 'bkWidth', 'drWidth', 'blur', 'labelOp', 'sigSize'].forEach(function (k) {
     var inp = $('#set-' + k);
     inp.addEventListener('input', function (e) {
       applySetting(k, parseInt(e.target.value, 10));
@@ -1917,6 +1944,35 @@
   if (sigIn) sigIn.addEventListener('change', function (e) {
     state.settings.sig = String(e.target.value || '').slice(0, 80);
     applySig();
+    commit({ noRender: true });
+  });
+
+  /* signature font picker (ruqaa / sans / mono / serif) */
+  var sfBtns = document.querySelectorAll('[data-sigfont]');
+  for (var sfi = 0; sfi < sfBtns.length; sfi++) {
+    (function (b) {
+      b.addEventListener('click', function () {
+        state.settings.sigFont = b.getAttribute('data-sigfont');
+        applySig();
+        syncDrawerDisplay();
+        commit({ noRender: true });
+      });
+    })(sfBtns[sfi]);
+  }
+
+  /* signature color — mirrors the label-color row */
+  var sigColorIn = $('#set-sigColor');
+  if (sigColorIn) sigColorIn.addEventListener('input', function (e) {
+    state.settings.sigColor = e.target.value;
+    applySig();
+    var scv = $('#val-sigColor');
+    if (scv) scv.textContent = e.target.value;
+    commit({ noRender: true });
+  });
+  $('#sigColorReset').addEventListener('click', function () {
+    state.settings.sigColor = DEFAULTS.settings.sigColor;
+    applySig();
+    syncDrawerDisplay();
     commit({ noRender: true });
   });
 

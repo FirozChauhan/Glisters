@@ -208,6 +208,32 @@
         <label class="set-name" for="set-sig">Signature</label>
         <input type="text" id="set-sig" class="wall-add-input" maxlength="80" placeholder="فیروز خان چوہان" autocomplete="off" spellcheck="false" aria-label="bottom-right signature text">
       </div>
+      <div class="set-row wall-filter">
+        <span class="set-name">Sig font</span>
+        <div class="seg" role="group" aria-label="signature font">
+          <button type="button" class="seg-btn" data-sigfont="ruqaa">ruqaa</button>
+          <button type="button" class="seg-btn" data-sigfont="sans">sans</button>
+          <button type="button" class="seg-btn" data-sigfont="mono">mono</button>
+          <button type="button" class="seg-btn" data-sigfont="serif">serif</button>
+        </div>
+      </div>
+      <div class="set-row">
+        <label class="set-name" for="set-sigSize">Sig size</label>
+        <div class="slider-wrap">
+          <button type="button" class="step" data-step="-1" data-target="sigSize" aria-label="decrease signature size">&minus;</button>
+          <input type="range" id="set-sigSize" min="14" max="72" step="1" data-unit="px">
+          <button type="button" class="step" data-step="1" data-target="sigSize" aria-label="increase signature size">+</button>
+          <em class="set-val" id="val-sigSize"></em>
+        </div>
+      </div>
+      <div class="set-row">
+        <span class="set-name">Sig color</span>
+        <div class="color-wrap">
+          <input type="color" id="set-sigColor" value="#f5f5f5" aria-label="signature color">
+          <em class="set-val" id="val-sigColor"></em>
+          <button type="button" class="btn-secondary" id="sigColorReset">reset</button>
+        </div>
+      </div>
     </section>
 
     <section class="set-group" id="grp-wallpapers">
@@ -326,18 +352,18 @@
     <section class="set-group" id="grp-keys">
       <h3 class="set-label">keys</h3>
       <ul class="keys">
-        <li><kbd>h j k l</kbd> move</li>
-        <li><kbd>enter</kbd> <kbd>o</kbd> open</li>
-        <li><kbd>tab</kbd> page</li>
-        <li><kbd>/</kbd> command bar</li>
-        <li><kbd>a e d</kbd> add · edit · del</li>
-        <li><kbd>g</kbd> <kbd>shift g</kbd> first · last</li>
-        <li><kbd>s</kbd> <kbd>esc</kbd> settings</li>
-        <li><kbd>b</kbd> bookmarks</li>
-        <li><kbd>w</kbd> <kbd>r</kbd> wallpaper · reload</li>
-        <li><kbd>f</kbd> <kbd>shift f</kbd> favourite · favourites as pool</li>
-        <li><kbd>shift d</kbd> download wallpaper</li>
-        <li><kbd>space</kbd> <kbd>space space</kbd> safe wallpaper · apply</li>
+        <li><span>move</span><span class="kbd-group"><kbd>h j k l</kbd></span></li>
+        <li><span>open (new tab: ctrl/meta)</span><span class="kbd-group"><kbd>enter</kbd><kbd>o</kbd></span></li>
+        <li><span>page flip</span><span class="kbd-group"><kbd>tab</kbd></span></li>
+        <li><span>command bar</span><span class="kbd-group"><kbd>/</kbd><kbd>:</kbd></span></li>
+        <li><span>add · edit · delete</span><span class="kbd-group"><kbd>a</kbd><kbd>e</kbd><kbd>d</kbd></span></li>
+        <li><span>first · last</span><span class="kbd-group"><kbd>g</kbd><kbd>G</kbd></span></li>
+        <li><span>settings</span><span class="kbd-group"><kbd>s</kbd><kbd>esc</kbd></span></li>
+        <li><span>bookmarks bar</span><span class="kbd-group"><kbd>b</kbd></span></li>
+        <li><span>wallpaper · reload</span><span class="kbd-group"><kbd>w</kbd><kbd>r</kbd></span></li>
+        <li><span>favourite · favourites as pool</span><span class="kbd-group"><kbd>f</kbd><kbd>F</kbd></span></li>
+        <li><span>download wallpaper</span><span class="kbd-group"><kbd>D</kbd></span></li>
+        <li><span>safe · apply safe</span><span class="kbd-group"><kbd>space</kbd><kbd>space space</kbd></span></li>
       </ul>
     </section>
   </div>

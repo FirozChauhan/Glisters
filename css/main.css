@@ -479,6 +479,10 @@ kbd {
   display: flex;
   flex-direction: column;
   background: #171717;  /* one step above --card so the panel reads as a solid slab against the page */
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 26px 26px;  /* faint blueprint grid under the settings cards */
   border-right: 1px solid var(--line);
   transform: translateX(-100%);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
@@ -1078,13 +1082,27 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 
 .keys {
   list-style: none;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 5px 14px;
-  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 11.5px;
   color: var(--muted);
 }
-.keys li { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.keys li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.keys li > span:first-child { min-width: 0; }
+.kbd-group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
 .keys kbd {
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -1092,8 +1110,7 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
   background: var(--card);
   border: 1px solid var(--line-soft);
   border-bottom-width: 2px;
-  border-radius: 4px;
-  padding: 2px 5px;
+  padding: 2px 6px;
   white-space: nowrap;
 }
 
