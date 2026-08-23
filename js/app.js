@@ -1887,8 +1887,14 @@
   emptyAdd.addEventListener('click', function () { openModal(null); });
 
   syncNow.addEventListener('click', function () {
-    /* not signed in yet — a click on sync now offers the sign-in flow */
-    if (!signedIn() && authReady() && window.AUTH && window.AUTH.signIn) {
+    /* not signed in yet — a click on sync now offers the sign-in flow. Also
+       when the pill reads 'sign in to sync' after a worker 401 (session
+       rejected), the sign-in overlay RECOVERS the existing server session
+       instead of erroring, so route through it too. */
+    var stEl = $('#syncStatus');
+    var pillText = stEl ? stEl.textContent : '';
+    var authStuck = !signedIn() || /sign in to sync|session/i.test(pillText);
+    if (authStuck && authReady() && window.AUTH && window.AUTH.signIn) {
       if (acctSignInForm) {
         acctSignInForm.hidden = false;
         window.AUTH.signIn(acctSignInForm);
@@ -2100,6 +2106,7 @@
       if (r && r.unauthorized) {
         /* the worker rejected our token — surface the sign-in state and
            keep the local copy; no retry loop against a dead session */
+        console.warn('[sync] worker 401 on push. If this persists after a fresh sign-in, the worker CLERK_SECRET_KEY may not match the current Clerk instance (update: cd worker && wrangler secret put CLERK_SECRET_KEY).');
         dirty = true;
         setSyncStatus('auth', 'sign in to sync');
         return false;
@@ -2195,6 +2202,7 @@
     setSyncStatus('syncing', 'fetching…');
     window.SYNC.pull().then(function (remote) {
       if (remote && remote.unauthorized) {
+        console.warn('[sync] worker 401 on pull. If this persists after a fresh sign-in, the worker CLERK_SECRET_KEY may not match the current Clerk instance.');
         dirty = true;
         setSyncStatus('auth', 'sign in to sync');
         return;

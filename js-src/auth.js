@@ -89,14 +89,18 @@
     isSignedIn: false,
     user: null,
     getToken: function () {
-      /* return the current session JWT, refreshing if needed */
-      if (authStore.jwt && Date.now() < authStore.exp - 60000) {
-        return Promise.resolve(authStore.jwt);
+      /* return the current session JWT, refreshing only when it's near/past
+         expiry; on refresh failure keep the old JWT (the worker 401 will
+         drive a later retry) instead of dropping the session */
+      if (!authStore.jwt) return Promise.resolve(null);
+      if (authStore.sid && Date.now() >= authStore.exp - 60000) {
+        return refreshToken().then(function () {
+          return authStore.jwt;
+        }).catch(function () {
+          return authStore.jwt;
+        });
       }
-      if (authStore.jwt && authStore.sid) {
-        return refreshToken().then(function () { return authStore.jwt; });
-      }
-      return Promise.resolve(authStore.jwt || null);
+      return Promise.resolve(authStore.jwt);
     },
     signIn: function (el) {
       if (el) {
@@ -221,6 +225,11 @@
         method = 'POST';
       }
       var headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+      if (opts.headers) {
+        Object.keys(opts.headers).forEach(function (k) {
+          headers[k] = opts.headers[k];
+        });
+      }
       var body = null;
       if (opts.body) {
         var params = new URLSearchParams();
@@ -254,9 +263,11 @@
     authStore.jwt = jwt;
     authStore.sid = sid;
     authStore.email = email;
-    /* extract exp from the JWT payload */
+    /* extract exp from the JWT payload (payload is base64url — normalize to
+       base64 before atob, else exp silently becomes 0 and every getToken
+       call burns a refresh) */
     try {
-      var payload = JSON.parse(atob(jwt.split('.')[1]));
+      var payload = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
       authStore.exp = payload.exp ? payload.exp * 1000 : 0;
     } catch (e) {
       authStore.exp = 0;
@@ -291,11 +302,12 @@
   function refreshToken() {
     if (!authStore.jwt || !authStore.sid) return Promise.reject(new Error('no session'));
     return ensureDbJwt().then(function (token) {
-      return fetch(API + '/v1/client/sessions/' + authStore.sid + '/tokens?__clerk_db_jwt=' + encodeURIComponent(token || ''), {
+      return fetch(API + '/v1/client/sessions/' + authStore.sid + '/tokens?__clerk_db_jwt=' + encodeURIComponent(token || '')
+        + '&__clerk_api_version=2026-05-12&_clerk_js_version=6.29.2', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + authStore.jwt }
       }).then(function (r) {
-        if (!r.ok) return Promise.reject(new Error('refresh failed'));
+        if (!r.ok) return Promise.reject(new Error('refresh failed: ' + r.status));
         return r.json();
       });
     }).then(function (d) {
@@ -306,11 +318,11 @@
       emit();
       return jwt;
     }).catch(function (err) {
-      /* session expired or revoked — clear */
-      clearAuth();
-      api.isSignedIn = false;
-      api.user = null;
-      emit();
+      /* transient refresh failure — NEVER clear the session here. Logging
+         the user out because a refresh hiccupped is what stranded them in
+         the 'already signed in' loop (server session alive, local state
+         wiped). Callers decide; getToken keeps the old JWT as best-effort. */
+      console.warn('[auth] session refresh failed:', err && err.message);
       throw err;
     });
   }
@@ -492,6 +504,12 @@
         if (/couldn't find your account/i.test(msg)) {
           return { type: 'no_account' };
         }
+        /* the current client (dev browser token) already has an active
+           session (e.g. sign-up completed but local auth state was lost).
+           Recover — find the session on the client and mint a fresh token. */
+        if (err.code === 'already_signed_in' || /already signed in/i.test(msg)) {
+          return recoverExistingSession();
+        }
         throw new Error(msg);
       }
       if (resp.status === 'complete') {
@@ -557,6 +575,38 @@
       closeOverlay();
       return true;
     });
+  }
+
+  /* ===== recover an existing session after a client-side auth loss =====
+     When the Clerk API returns 'already_signed_in', the dev-browser-token
+     client still has an active session server-side (the sign-up completed).
+     Instead of erroring, GET /v1/client, find the session, and mint a
+     FRESH token via /tokens so the JWT is guaranteed valid for the worker. */
+
+  function recoverExistingSession() {
+    /* use the stored JWT as Authorization (it may be expired but the
+       endpoint often accepts it for session discovery). If the stored JWT
+       is gone, just use the dev browser token alone. */
+    var headers = {};
+    if (authStore.jwt) headers['Authorization'] = 'Bearer ' + authStore.jwt;
+    return apiFetch('/v1/client', { headers: headers }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        var client = d.response || d;
+        var sessions = client.sessions || [];
+        var sess = null;
+        for (var i = 0; i < sessions.length; i++) {
+          if (sessions[i].status === 'active') { sess = sessions[i]; break; }
+        }
+        if (!sess) sess = sessions[0];
+        if (!sess || !sess.id) throw new Error('No active session to recover');
+        return apiFetch('/v1/client/sessions/' + sess.id + '/tokens', { method: 'POST' })
+          .then(function (r2) { return r2.json(); })
+          .then(function (td) {
+            var jwt = td && (td.jwt || (td.response && td.response.jwt));
+            if (!jwt) throw new Error('No session token returned');
+            return finishSession(sess, jwt);
+          });
+      });
   }
 
   /* ===== sign-up ===== */
