@@ -105,7 +105,8 @@ styles; unauthenticated requests cannot read or write anything.
 Node ≥18 is required for the scripts and the worker; the extension itself is plain script tags with **zero npm dependencies** — sign-in and sign-up use Clerk's raw REST API from the extension page (no ClerkJS bundle, no hosted-page redirects, no remote code ever runs).
 
 ```bash
-# extension — zero-config: loads with no .env; sync just reports "cloud off"
+# extension — zero-config: js/config.js + js/auth.js are committed, so a
+# clone ships with sync + sign-in enabled out of the box
 chrome://extensions → Developer mode → Load unpacked → this folder
 
 # optional build helpers
@@ -119,7 +120,12 @@ wrangler secret put CLERK_SECRET_KEY   # Clerk secret key — never in .env
 wrangler deploy
 ```
 
-Zero-config: yes. Without `.env`, the grid still renders from baked defaults plus `links.txt`; cloud sync (sign-in gated) and the NSFW wallpaper option simply stay off.
+Zero-config: yes. `js/config.js` ships the public-scope values (worker URL,
+wallhaven key, Clerk publishable key) so anyone can load the extension and
+sign in immediately. The one real secret — the Clerk secret key — lives only
+in `wrangler secret` on the worker side, never in the repo. Without it, the
+grid still renders from baked defaults plus `links.txt`; cloud sync (sign-in
+gated) and the NSFW wallpaper option simply stay off.
 
 ## Configuration
 
