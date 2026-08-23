@@ -12,7 +12,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "bookmarks", "cookies"],
+  "permissions": ["storage", "bookmarks"],
   "host_permissions": [
     "https://*/*",
     "https://*.clerk.accounts.dev/*",

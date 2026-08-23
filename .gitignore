@@ -2,6 +2,7 @@
 js/config.js
 node_modules/
 .freebuff/
+worker/diagnose-jwt.mjs
 
 # wrangler local cache — can contain account/oauth credentials
 worker/.wrangler/

@@ -119,7 +119,7 @@ function isPrivateHost(hostname, port) {
        192.168/16 · 198.18/15 · 224/4+ */
     if (n >>> 24 === 0) return true;
     if ((n >>> 24) === 10) return true;
-    if ((n >>> 22) === 0x64) return true;            /* 100.64.0.0/10 */
+    if ((n >>> 22) === 0x191) return true;           /* 100.64.0.0/10 (RFC 6598 CGN) */
     if ((n >>> 24) === 127) return true;
     if ((n >>> 16) === 0xA9FE) return true;          /* 169.254.0.0/16 */
     if ((n >>> 20) === 0xAC1) return true;           /* 172.16.0.0/12 */
@@ -129,10 +129,16 @@ function isPrivateHost(hostname, port) {
     if (n >>> 28 >= 14) return true;                 /* 224/4 multicast + up */
     return false;
   }
+  if (h.includes(':') && /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.test(h)) {
+    /* IPv4-mapped IPv6 (::ffff:a.b.c.d) is just an IPv4 address in IPv6
+       clothing — decode it and re-run the IPv4 guard, or a host like
+       ::ffff:169.254.169.254 (metadata) or ::ffff:10.0.0.1 slips through */
+    return isPrivateHost(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(h)[1], port);
+  }
   if (/^[0-9a-f:]+$/i.test(h) && h.includes(':')) {
     if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') ||
         h.startsWith('fe8') || h.startsWith('fe9') || h.startsWith('fea') ||
-        h.startsWith('feb') || h.startsWith('::ffff:127.')) return true;
+        h.startsWith('feb')) return true;
   }
   return false;
 }
@@ -235,6 +241,9 @@ export default {
       if (request.method === 'PUT') {
         const key = userKey(userId);
         const body = await request.text();
+        if (body.length > 5 * 1024 * 1024) {
+          return new Response('payload too large', { status: 413, headers: CORS });
+        }
         let incomingAt = 0;
         try { incomingAt = Number((JSON.parse(body).updatedAt) || 0); } catch (e) { /* not JSON */ }
         /* last-write-wins by timestamp, not arrival order: a stale client
