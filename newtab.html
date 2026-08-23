@@ -188,7 +188,7 @@
         <label class="set-name" for="set-bkWidth">Sidebar width</label>
         <div class="slider-wrap">
           <button type="button" class="step" data-step="-8" data-target="bkWidth" aria-label="decrease sidebar width">&minus;</button>
-          <input type="range" id="set-bkWidth" min="280" max="560" step="8">
+          <input type="range" id="set-bkWidth" min="280" max="640" step="8">
           <button type="button" class="step" data-step="8" data-target="bkWidth" aria-label="increase sidebar width">+</button>
           <em class="set-val" id="val-bkWidth"></em>
         </div>
@@ -356,6 +356,10 @@
 <div class="auth-overlay" id="authOverlay" hidden>
   <div class="auth-modal">
     <button type="button" class="auth-close" id="authClose" aria-label="close">×</button>
+    <div class="auth-head">
+      <h2 class="auth-title">Glisters</h2>
+      <p class="auth-sub">Sync your tiles, walls &amp; bookmarks across devices</p>
+    </div>
 
     <div class="auth-tabs">
       <button type="button" class="auth-tab active" id="authTabSignIn">Sign in</button>
@@ -367,12 +371,15 @@
       <label class="auth-field"><span>email</span><input type="email" id="authSignInEmail" placeholder="you@example.com" autocomplete="email" spellcheck="false"></label>
       <label class="auth-field"><span>password</span><input type="password" id="authSignInPassword" placeholder="••••••••" autocomplete="current-password"></label>
       <button type="submit" class="auth-submit" id="authSignInSubmit">Sign in</button>
+      <p class="auth-hint" id="authGoSignUp" hidden>No account? <a href="#">Sign up instead</a></p>
     </form>
 
     <!-- sign-up form -->
     <form class="auth-form" id="authSignUpForm" novalidate hidden>
       <label class="auth-field"><span>email</span><input type="email" id="authSignUpEmail" placeholder="you@example.com" autocomplete="email" spellcheck="false"></label>
-      <label class="auth-field"><span>password</span><input type="password" id="authSignUpPassword" placeholder="15+ characters" autocomplete="new-password"></label>
+      <label class="auth-field"><span>password</span><input type="password" id="authSignUpPassword" placeholder="15+ characters" autocomplete="new-password">
+        <span class="auth-field-hint" id="authPassHint">at least 15 characters</span>
+      </label>
       <label class="auth-field"><span>confirm</span><input type="password" id="authSignUpConfirm" placeholder="repeat password" autocomplete="new-password"></label>
       <button type="submit" class="auth-submit" id="authSignUpSubmit">Sign up</button>
     </form>
@@ -385,6 +392,7 @@
       <p class="auth-verify-hint">We emailed a code to <b id="authVerifyEmail"></b>.</p>
       <label class="auth-field"><span>code</span><input type="text" id="authVerifyCode" placeholder="123456" autocomplete="one-time-code" inputmode="numeric"></label>
       <button type="submit" class="auth-submit" id="authVerifySubmit">Verify</button>
+      <p class="auth-hint"><a href="#" id="authResend">Resend code</a></p>
     </form>
 
     <p class="auth-error" id="authError" hidden></p>

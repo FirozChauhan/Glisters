@@ -1234,13 +1234,28 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 
 .auth-modal {
   position: relative;
-  width: 380px;
+  width: 400px;
   max-width: 92vw;
   background: var(--surface);
   border: 1px solid var(--line-soft);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
-  padding: 28px 28px 22px;
+  padding: 30px 30px 24px;
   animation: auth-rise 0.18s ease-out;
+}
+
+.auth-head { margin-bottom: 20px; }
+.auth-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: var(--fg);
+}
+.auth-sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 @keyframes auth-rise {
@@ -1312,9 +1327,37 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 .auth-field input:focus { border-color: var(--fg-2); }
 .auth-field input::placeholder { color: var(--faint); }
 
+.auth-field-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: -2px;
+  letter-spacing: 0.02em;
+  transition: color 0.12s ease;
+}
+.auth-field-hint.weak { color: var(--danger, #e06c75); }
+.auth-field-hint.good { color: var(--ok, #98c379); }
+.auth-field input[data-mismatch] { border-color: var(--danger, #e06c75); }
+
+.auth-hint {
+  margin-top: -4px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: center;
+}
+.auth-hint a {
+  color: var(--accent, var(--fg-2));
+  text-decoration: none;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-hint a:hover {
+  text-decoration: underline;
+}
+
 .auth-submit {
-  margin-top: 4px;
-  padding: 10px 14px;
+  margin-top: 6px;
+  padding: 11px 14px;
   background: var(--fg);
   color: #0a0a0a;
   border: none;
@@ -1324,9 +1367,10 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
   letter-spacing: 0.05em;
   text-transform: uppercase;
   cursor: pointer;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.12s ease, transform 0.08s ease;
 }
-.auth-submit:hover { opacity: 0.85; }
+.auth-submit:hover:not(:disabled) { opacity: 0.88; }
+.auth-submit:active:not(:disabled) { transform: translateY(1px); }
 .auth-submit:disabled { opacity: 0.5; cursor: wait; }
 
 .auth-verify-hint {
@@ -1337,10 +1381,14 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 .auth-verify-hint b { color: var(--fg); font-weight: 600; }
 
 .auth-error {
-  margin-top: 12px;
+  margin-top: 14px;
+  padding: 9px 11px;
+  background: color-mix(in srgb, var(--danger, #e06c75) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger, #e06c75) 35%, transparent);
   font-size: 12px;
-  color: var(--danger);
+  color: var(--danger, #e06c75);
   line-height: 1.45;
+  border-radius: 2px;
 }
 .auth-note {
   margin-top: 12px;

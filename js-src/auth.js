@@ -80,6 +80,7 @@
   var signInEmail, signInPass, signInSubmit;
   var signUpEmail, signUpPass, signUpConfirm, signUpSubmit, captchaEl;
   var verifyCode, verifySubmit, verifyEmailEl;
+  var resendLink, signUpHintLink, signInPasswordHint;
   var authError, authNote;
 
   var api = {
@@ -484,7 +485,14 @@
     }).then(function (r) { return r.json(); }).then(function (d) {
       var resp = d.response || d;
       if (d.errors && d.errors.length) {
-        throw new Error(d.errors[0].long_message || d.errors[0].message || 'Sign-in failed');
+        var err = d.errors[0];
+        var msg = err.long_message || err.message || 'Sign-in failed';
+        /* Clerk returns 422 "Couldn't find your account" for unknown email
+           OR email that has an incomplete sign-up — offer sign-up instead */
+        if (/couldn't find your account/i.test(msg)) {
+          return { type: 'no_account' };
+        }
+        throw new Error(msg);
       }
       if (resp.status === 'complete') {
         return extractSession(d);
@@ -506,7 +514,7 @@
         });
       }
       if (resp.status === 'needs_identifier') {
-        throw new Error('No account for that email. Try signing up.');
+        return { type: 'no_account' };
       }
       throw new Error('Sign-in returned unexpected status: ' + resp.status);
     });
@@ -627,8 +635,11 @@
     verifyCode = document.getElementById('authVerifyCode');
     verifySubmit = document.getElementById('authVerifySubmit');
     verifyEmailEl = document.getElementById('authVerifyEmail');
+    resendLink = document.getElementById('authResend');
+    signUpHintLink = document.getElementById('authGoSignUp');
     authError = document.getElementById('authError');
     authNote = document.getElementById('authNote');
+    signInPasswordHint = document.getElementById('authPassHint');
   }
 
   function openOverlay() {
@@ -664,6 +675,7 @@
     if (tabSignIn) tabSignIn.className = 'auth-tab active';
     if (tabSignUp) tabSignUp.className = 'auth-tab';
     if (captchaEl) captchaEl.hidden = true;
+    if (signUpHintLink) signUpHintLink.hidden = true;
     destroyTurnstile();
     hideError();
     hideNote();
@@ -676,6 +688,7 @@
     if (tabSignIn) tabSignIn.className = 'auth-tab';
     if (tabSignUp) tabSignUp.className = 'auth-tab active';
     if (captchaEl) captchaEl.hidden = !captchaRequired;
+    if (signUpHintLink) signUpHintLink.hidden = true;
     hideError();
     hideNote();
     /* ensure the sandboxed captcha iframe is ready (only when captcha is on) */
@@ -687,6 +700,7 @@
     if (signUpForm) signUpForm.hidden = true;
     if (verifyForm) verifyForm.hidden = false;
     if (captchaEl) captchaEl.hidden = !captchaRequired;
+    if (signUpHintLink) signUpHintLink.hidden = true;
     if (verifyEmailEl) verifyEmailEl.textContent = email;
     if (tabSignIn) tabSignIn.className = 'auth-tab';
     if (tabSignUp) tabSignUp.className = 'auth-tab active';
@@ -720,9 +734,22 @@
     if (authNote) { authNote.textContent = ''; authNote.hidden = true; }
   }
 
+  var BUSY_LABELS = {
+    authSignInSubmit: 'Signing in…',
+    authSignUpSubmit: 'Creating account…',
+    authVerifySubmit: 'Verifying…'
+  };
+
   function setBusy(form, busy) {
     var submit = form && form.querySelector('.auth-submit');
-    if (submit) submit.disabled = busy;
+    if (!submit) return;
+    if (busy) {
+      if (!submit.dataset.restLabel) submit.dataset.restLabel = submit.textContent;
+      submit.textContent = BUSY_LABELS[submit.id] || 'Please wait…';
+    } else {
+      submit.textContent = submit.dataset.restLabel || submit.textContent;
+    }
+    submit.disabled = busy;
   }
 
   /* ===== wire form events ===== */
@@ -734,6 +761,30 @@
     /* tab switching */
     if (tabSignIn) tabSignIn.addEventListener('click', function () { showSignInForm(); });
     if (tabSignUp) tabSignUp.addEventListener('click', function () { showSignUpForm(); });
+
+    /* live password-strength hint on the sign-up form */
+    if (signUpPass && signInPasswordHint) {
+      signUpPass.addEventListener('input', function () {
+        var n = signUpPass.value.length;
+        if (n === 0) {
+          signInPasswordHint.textContent = 'at least 15 characters';
+          signInPasswordHint.className = 'auth-field-hint';
+        } else if (n < 15) {
+          signInPasswordHint.textContent = (15 - n) + ' more characters needed';
+          signInPasswordHint.className = 'auth-field-hint weak';
+        } else {
+          signInPasswordHint.textContent = 'looks good — 15+ characters';
+          signInPasswordHint.className = 'auth-field-hint good';
+        }
+      });
+      signUpConfirm && signUpConfirm.addEventListener('input', function () {
+        if (signUpConfirm.value.length && signUpConfirm.value !== signUpPass.value) {
+          signUpConfirm.setAttribute('data-mismatch', '1');
+        } else {
+          signUpConfirm.removeAttribute('data-mismatch');
+        }
+      });
+    }
 
     /* close */
     if (closeBtn) closeBtn.addEventListener('click', closeOverlay);
@@ -760,7 +811,13 @@
       if (!email) { showError('Enter your email.'); return; }
       if (!pass) { showError('Enter your password.'); return; }
       setBusy(signInForm, true);
-      doSignIn(email, pass).catch(function (err) {
+      doSignIn(email, pass).then(function (res) {
+        setBusy(signInForm, false);
+        if (res && res.type === 'no_account') {
+          showError('No account found for that email.');
+          if (signUpHintLink) signUpHintLink.hidden = false;
+        }
+      }).catch(function (err) {
         setBusy(signInForm, false);
         showError(err.message || 'Sign-in failed.');
       });
@@ -793,12 +850,38 @@
       var code = verifyCode.value.trim();
       if (!code) { showError('Enter the verification code.'); return; }
       setBusy(verifyForm, true);
-      /* complete verification + set password */
-      var password = _tempPassword; _tempPassword = null;
-      setPasswordAndComplete(code, password).catch(function (err) {
+      setPasswordAndComplete(code, _tempPassword).then(function () {
+        _tempPassword = null;
+      }).catch(function (err) {
         setBusy(verifyForm, false);
         showError(err.message || 'Verification failed.');
       });
+    });
+
+    /* resend code link */
+    if (resendLink) resendLink.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (!signUpId) return;
+      hideError();
+      showNote('Sending a new code…');
+      apiFetch('/v1/client/sign_ups/' + signUpId + '/prepare_verification', {
+        method: 'POST',
+        body: { strategy: 'email_code' }
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.errors && d.errors.length) {
+          showError(d.errors[0].long_message || 'Failed to resend code');
+        } else {
+          showNote('A new code was sent to ' + verifyEmail + '.');
+        }
+      }).catch(function (err) {
+        showError(err.message || 'Failed to send code');
+      });
+    });
+
+    /* sign-up hint link — switch to sign-up from sign-in error */
+    if (signUpHintLink) signUpHintLink.addEventListener('click', function (e) {
+      e.preventDefault();
+      showSignUpForm();
     });
   }
 
@@ -806,20 +889,21 @@
 
   function setPasswordAndComplete(code, password) {
     if (!signUpId) return Promise.reject(new Error('No sign-up in progress'));
-    /* step 1: verify email code — path is /client/sign_ups/{id}/attempt_verification */
-    return apiFetch('/v1/client/sign_ups/' + signUpId + '/attempt_verification', {
-      method: 'POST',
-      body: { strategy: 'email_code', code: code }
-    }).then(function (r) { return r.json(); }).then(function (d) {
-      if (d.errors && d.errors.length) {
-        throw new Error(d.errors[0].long_message || d.errors[0].message || 'Verification failed');
-      }
-      var resp = d.response || d;
-      var verified = resp.status === 'verified' || (resp.verification && resp.verification.status === 'verified');
-      if (!verified) {
-        throw new Error('Email verification failed — try the code again.');
-      }
-      /* step 2: set password on the sign-up (captcha token only if required) */
+
+    /* check if the email is already verified (e.g., user retries after a
+       failed password PATCH) — skip attempt_verification if so */
+    function checkIfAlreadyVerified() {
+      return apiFetch('/v1/client/sign_ups/' + signUpId, { method: 'GET' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var resp = d.response || d;
+          var emailVer = resp.verifications && resp.verifications.email_address;
+          if (emailVer && emailVer.status === 'verified') return true;
+          return false;
+        });
+    }
+
+    function doSetPassword() {
       var patchBody = {
         strategy: 'password',
         password: password
@@ -835,18 +919,45 @@
           method: 'PATCH',
           body: patchBody
         });
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.errors && d.errors.length) {
+          throw new Error(d.errors[0].long_message || d.errors[0].message || 'Failed to set password');
+        }
+        var resp = d.response || d;
+        if (resp.status === 'complete' || (d.client && d.client.sessions && d.client.sessions.length)) {
+          return extractSession(d);
+        }
+        var missing = (resp.missing_fields || []).join(', ') || 'unknown requirements';
+        throw new Error('Sign-up incomplete — missing: ' + missing);
       });
-    }).then(function (r) { return r.json(); }).then(function (d) {
-      if (d.errors && d.errors.length) {
-        throw new Error(d.errors[0].long_message || d.errors[0].message || 'Failed to set password');
+    }
+
+    return checkIfAlreadyVerified().then(function (alreadyVerified) {
+      if (alreadyVerified) {
+        return doSetPassword();
       }
-      var resp = d.response || d;
-      if (resp.status === 'complete' || (d.client && d.client.sessions && d.client.sessions.length)) {
-        return extractSession(d);
-      }
-      /* sign-up not complete yet (rare) — surface what's missing */
-      var missing = (resp.missing_fields || []).join(', ') || 'unknown requirements';
-      throw new Error('Sign-up incomplete — missing: ' + missing);
+      /* step 1: verify email code */
+      return apiFetch('/v1/client/sign_ups/' + signUpId + '/attempt_verification', {
+        method: 'POST',
+        body: { strategy: 'email_code', code: code }
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.errors && d.errors.length) {
+          var err = d.errors[0];
+          var msg = err.long_message || err.message || 'Verification failed';
+          /* if the code was already verified (retry after a failed PATCH),
+             skip to the password step */
+          if (err.code === 'form_already_verified' || /already verified|already been verified/i.test(msg)) {
+            return doSetPassword();
+          }
+          throw new Error(msg);
+        }
+        var resp = d.response || d;
+        var verified = resp.status === 'verified' || (resp.verification && resp.verification.status === 'verified');
+        if (!verified) {
+          throw new Error('Email verification failed — try the code again.');
+        }
+        return doSetPassword();
+      });
     });
   }
 
