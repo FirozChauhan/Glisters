@@ -379,16 +379,29 @@ corners, tabs):
   own single-shot password call — no `strategy` field). Unknown email →
   `needs_identifier` → "no account, try sign-up"; if the API ever asks for a
   factor, a follow-up `prepare_first_factor {strategy:'password'}` is made.
-- **Sign up**: requires a Cloudflare **Turnstile** captcha token (widget
-  rendered in the overlay inside a sandboxed iframe — `captcha.html`, see
-  §3.17; the extension page CSP itself can't load it, but the sandbox page
-  has its own relaxed CSP — `captcha_enabled:true` on the instance, no
-  bypass exists). Flow: `POST /v1/client/sign_ups {strategy:'email_code',
-  email_address, captchaToken, captchaWidgetType:'smart'}` →
+- **Sign up**: bot protection was ON for sign-ups (a Cloudflare Turnstile
+  token was required — widget rendered in a sandboxed iframe `captcha.html`,
+  see §3.17). **Turnstile cannot run in a null-origin sandbox** (its script
+  reads `window.top.location`; Chrome throws "Blocked a frame with origin
+  null…"), so captcha was turned OFF in the Clerk dashboard (Security → Bot
+  protection; dev instance, no risk). The extension auto-detects this from
+  `/v1/environment` — when `display_config.captcha_public_key` is null,
+  sign-up skips the widget and sends no captcha fields. Flow: `POST
+  /v1/client/sign_ups {strategy:'email_code', email_address}` →
   `prepare_verification {strategy:'email_code'}` sends the code →
-  `attempt_verification {strategy:'email_code', code}` verifies →
-  `PATCH /v1/client/sign_ups/{id} {strategy:'password', password}` — the
-  sign-up then completes and returns the session.
+  `attempt_verification {strategy:'email_code', code}` verifies → `PATCH
+  /v1/client/sign_ups/{id} {strategy:'password', password}` — the sign-up
+  then completes and returns the session.
+- **FAPI form-encoding gotcha (critical)**: Clerk's FAPI parses request
+  params from `application/x-www-form-urlencoded` bodies — JSON bodies
+  silently fail field validation on some endpoints (e.g. `prepare_verification`
+  returns 422 "strategy must be included" even when the JSON contains it;
+  create/sign-in happen to accept JSON). `apiFetch` therefore sends every
+  body as `URLSearchParams`, sends PATCH as `POST ?_method=PATCH` (form
+  encoding can't PATCH), and appends `__clerk_api_version=2026-05-12` +
+  `_clerk_js_version=6.29.2` — exactly what ClerkJS's FAPI client does.
+  A 401 (`dev_browser_unauthenticated`, expired dev token) mints a fresh
+  token and retries once.
 - **Session**: the JWT from `client.sessions[0].last_active_token` is stored
   in chrome.storage (`glisters-auth`) and reused across reloads; expired
   tokens are refreshed via `POST /v1/client/sessions/{sid}/tokens` with the
