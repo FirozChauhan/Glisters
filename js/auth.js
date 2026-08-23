@@ -1,4 +1,4 @@
-/* Generated at 2026-08-23T09:53:31.352Z. DO NOT EDIT — edit js-src/auth.js instead. */
+/* Generated at 2026-08-23T10:33:51.112Z. DO NOT EDIT — edit js-src/auth.js instead. */
 /**
  * GLISTERS — In-extension auth (Clerk raw API, no ClerkJS, no hosted page redirects)
  *
