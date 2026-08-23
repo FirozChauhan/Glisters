@@ -102,7 +102,7 @@ styles; unauthenticated requests cannot read or write anything.
 
 ## Run Locally
 
-Node ≥18 is required for the scripts and the worker; the extension itself is plain script tags with **zero npm dependencies** — sign-in reads the Clerk `__session` cookie via `chrome.cookies` (no ClerkJS bundle, no remote code ever runs).
+Node ≥18 is required for the scripts and the worker; the extension itself is plain script tags with **zero npm dependencies** — sign-in and sign-up use Clerk's raw REST API from the extension page (no ClerkJS bundle, no hosted-page redirects, no remote code ever runs).
 
 ```bash
 # extension — zero-config: loads with no .env; sync just reports "cloud off"
@@ -134,7 +134,7 @@ Zero-config: yes. Without `.env`, the grid still renders from baked defaults plu
 ```
 manifest.json             MV3 manifest; new-tab override, pinned key, CSP
 newtab.html               Static shell; loads the six JS modules in order
-js-src/auth.js            Cookie-based auth source (copied → js/auth.js, gitignored)
+js-src/auth.js            In-extension auth source (plain copy → js/auth.js, gitignored)
 js/app.js                 Core: grid, vim keys, drag-reorder, modal, sync orchestration
 js/bookmarks.js           Bookmarks sidebar — direct chrome.bookmarks editor
 js/walls.js               Wallhaven pool, favourites, safe wallpaper, blob cache

@@ -355,35 +355,44 @@ OWN Clerk project (a test instance today: app "glisters", instance id
 `CLERK_PROXY_URL` is only an optional override for a dead/custom pk domain
 and is empty in the current `.env`.
 
-**The cookie-based auth flow (no ClerkJS)**: the Clerk API refuses to start
-OAuth verification for extension clients (the sign-in `create` always returns
-`needs_identifier` without a verification URL, and `oauth/authorize` 401s —
-reproduced on both the old and new instances), so the SDK is unusable from
-the extension and no ClerkJS ships in it. Instead `js-src/auth.js` derives
-the instance's domains from the publishable key (the pk base64-decodes to
-`<instance>.clerk.accounts.dev`; hosted pages live on
-`<instance>.accounts.dev`) and opens the **Clerk hosted sign-in page**
-(`https://tidy-marmoset-1299.accounts.dev/sign-in` — Clerk's own domain, a
-normal browser flow, Google OAuth already enabled on the instance) in a new
-tab. That flow sets the HTTP-only `__session` cookie on the hosted domain,
-which the extension reads with the privileged `chrome.cookies` API (`cookies`
-permission + `https://*/*` host permission are already in the manifest). The
-cookie value IS the Clerk session JWT the worker verifies, so sync works with
-zero extra plumbing. Sign-in/out updates the extension live via
-`chrome.cookies.onChanged` plus a 30s polling fallback; the account row's
-user info comes from `GET {frontend}/v1/me` with the JWT as Bearer (CORS
-verified from the extension origin). The extension never touches morphica's
-domain or cookies — the two Clerk projects are fully separate.
+**In-extension auth (raw Clerk REST API — no ClerkJS, no hosted-page
+redirects)**: the Clerk API refuses to start OAuth verification for
+extension clients (the sign-in `create` always returns `needs_identifier`
+without a verification URL, and `oauth/authorize` 401s — reproduced on both
+instances), so no SDK ships in the extension and Google OAuth is unavailable
+in-page. What DOES work from the extension origin is password sign-in and
+email-code sign-up, via raw REST calls that carry a **dev browser token**
+minted by `POST /v1/dev_browser` (a JWT, passed as the `__clerk_db_jwt`
+query param on every request — exactly what ClerkJS does internally in dev
+mode). `js-src/auth.js` derives the instance's frontend API from the
+publishable key (the pk base64-decodes to
+`<instance>.clerk.accounts.dev`). The settings drawer's account row opens an
+**in-extension auth overlay** (`#authOverlay` — blurred backdrop, sharp
+corners, tabs):
 
-`js/auth.js` is also generated — from `js-src/auth.js` via
-`node scripts/gen-auth.mjs`. It is a plain copy (no bundling, no npm deps —
-the extension ships no ClerkJS bundle at all), stamped with a timestamp. It
-is gitignored like `config.js`. Never hand-edit it.
+- **Sign in**: `POST /v1/client/sign_ins {identifier, password}` (ClerkJS's
+  own single-shot password call — no `strategy` field). Unknown email →
+  `needs_identifier` → "no account, try sign-up"; if the API ever asks for a
+  factor, a follow-up `prepare_first_factor {strategy:'password'}` is made.
+- **Sign up**: requires a Cloudflare **Turnstile** captcha token (widget
+  rendered in the overlay; script from challenges.cloudflare.com is allowed
+  by the manifest CSP — `captcha_enabled:true` on the instance, no bypass
+  exists). Flow: `POST /v1/client/sign_ups {strategy:'email_code',
+  email_address, captchaToken, captchaWidgetType:'smart'}` →
+  `prepare_verification {strategy:'email_code'}` sends the code →
+  `attempt_verification {strategy:'email_code', code}` verifies →
+  `PATCH /v1/client/sign_ups/{id} {strategy:'password', password}` — the
+  sign-up then completes and returns the session.
+- **Session**: the JWT from `client.sessions[0].last_active_token` is stored
+  in chrome.storage (`glisters-auth`) and reused across reloads; expired
+  tokens are refreshed via `POST /v1/client/sessions/{sid}/tokens` with the
+  old JWT as Bearer. User info comes from `GET {frontend}/v1/me`. The dev
+  browser token is cached in chrome.storage (`glisters-db-jwt`).
+- **Sign out**: `DELETE /v1/client/sessions` with Bearer + local state
+  cleared.
 
-`js/auth.js` is also generated — from `js-src/auth.js` via
-`node scripts/gen-auth.mjs`. It is a plain copy (no bundling, no npm deps —
-the extension ships no ClerkJS bundle at all), stamped with a timestamp. It
-is gitignored like `config.js`. Never hand-edit it.
+The extension never touches morphica's domain or cookies — the two Clerk
+projects are fully separate.
 
 ### 3.10 `worker/src/index.js` (~270 lines) — Cloudflare Worker
 - **Auth**: every `/save` and `/backup` request must carry

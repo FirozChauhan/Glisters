@@ -1947,14 +1947,13 @@
     if (pill) pill.className = 'sync-pill ' + kind;
   }
 
-  /* ---- account (Clerk) UI: the settings drawer's account row ---- */
+  /* ---- account (Clerk) auth UI: the settings drawer's account row ---- */
 
-  /* this extension has its own dedicated Clerk instance, and the Clerk API
-     refuses to start the OAuth verification for extension clients, so the
-     extension does not run ClerkJS at all — AUTH.signIn renders a Google
-     button that opens the instance's hosted sign-in page (on Clerk's own
-     domain) in a new tab; the resulting __session cookie is read via
-     chrome.cookies (see js-src/auth.js) */
+  /* this extension has its own dedicated Clerk instance, and Clerk's API
+     refuses OAuth for extension clients, so the extension talks to Clerk's
+     raw REST API directly (password sign-in, email-code sign-up, Turnstile
+     captcha — see js-src/auth.js). AUTH.signIn opens the in-extension auth
+     overlay (#authOverlay) with sign-in / sign-up forms; no tab redirects. */
   function hideSignInForm() {
     if (acctSignInForm && !acctSignInForm.hidden) {
       if (window.AUTH && window.AUTH.unmountSignIn) window.AUTH.unmountSignIn(acctSignInForm);
