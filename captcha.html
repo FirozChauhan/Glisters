@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>captcha</title>
+<style>
+  body { margin: 0; padding: 0; background: transparent; display: flex; align-items: center; justify-content: center; min-height: 65px; }
+  #container { margin: 0 auto; }
+</style>
+</head>
+<body>
+  <div id="container"></div>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+  <script>
+  (function () {
+    'use strict';
+    var sitekey = '';
+    try { sitekey = decodeURIComponent((location.search.match(/[?&]sitekey=([^&]*)/) || [])[1] || ''); } catch (e) {}
+    var widgetId = null;
+
+    function notify(type, payload) {
+      try { parent.postMessage({ source: 'glisters-captcha', type: type, payload: payload || null }, '*'); } catch (e) {}
+    }
+
+    function renderWidget() {
+      if (!window.turnstile) { notify('error', 'turnstile not loaded'); return; }
+      try {
+        widgetId = window.turnstile.render('#container', {
+          sitekey: sitekey,
+          callback: function (token) { notify('token', token); },
+          'expired-callback': function () { notify('expired'); },
+          'error-callback': function () { notify('error', 'widget error'); }
+        });
+      } catch (e) { notify('error', String(e && e.message || e)); }
+    }
+
+    /* listen for reset requests from the parent */
+    window.addEventListener('message', function (e) {
+      var d = e.data;
+      if (d && d.source === 'glisters-parent') {
+        if (d.type === 'reset' && widgetId !== null && window.turnstile) {
+          window.turnstile.reset(widgetId);
+          notify('reset');
+        }
+      }
+    });
+
+    window.addEventListener('load', function () {
+      if (window.turnstile) { renderWidget(); }
+      else {
+        /* turnstile script may still be loading — poll */
+        var t = setInterval(function () {
+          if (window.turnstile) { clearInterval(t); renderWidget(); }
+        }, 100);
+        setTimeout(function () { clearInterval(t); }, 10000);
+      }
+      notify('ready');
+    });
+
+    notify('ready');
+  })();
+  </script>
+</body>
+</html>

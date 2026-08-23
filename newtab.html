@@ -374,9 +374,11 @@
       <label class="auth-field"><span>email</span><input type="email" id="authSignUpEmail" placeholder="you@example.com" autocomplete="email" spellcheck="false"></label>
       <label class="auth-field"><span>password</span><input type="password" id="authSignUpPassword" placeholder="15+ characters" autocomplete="new-password"></label>
       <label class="auth-field"><span>confirm</span><input type="password" id="authSignUpConfirm" placeholder="repeat password" autocomplete="new-password"></label>
-      <div id="authCaptcha"></div>
       <button type="submit" class="auth-submit" id="authSignUpSubmit">Sign up</button>
     </form>
+
+    <!-- captcha stays outside the forms so a fresh token can render while the verify step is shown -->
+    <div id="authCaptcha" hidden></div>
 
     <!-- verification code step -->
     <form class="auth-form" id="authVerifyForm" novalidate hidden>

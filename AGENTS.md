@@ -38,16 +38,18 @@ manifest.json  →  newtab.html  (Chrome newtab override)
                       │  loads in order:
                       ├─ js/config.js     (runtime constants; generated)
                       ├─ js/auth.js       (window.AUTH — Clerk session via
-                      │                     __session cookie; generated,
+                      │                     raw REST API; generated,
                       │                     plain copy from js-src/auth.js)
+                      │   └─ embeds captcha.html  (sandbox page, see §3.17)
                       ├─ js/sync.js       (window.SYNC — cloud push/pull, JWT)
                       ├─ js/walls.js      (window.WALLS — wallpapers)
                       ├─ js/bookmarks.js  (window.BOOKMARKS — sidebar)
                       └─ js/app.js        (window.CONFIG consumer — grid/core)
 css/main.css, css/bookmarks.css   (theme: tokens in :root)
+captcha.html  (sandbox page — Turnstile captcha; loaded by auth.js)
 icons/  (generated 16/48/128 PNGs)
 scripts/gen-config.mjs / gen-auth.mjs / gen-icons.mjs  (Node build helpers)
-js-src/auth.js  (auth SOURCE — cookie-based, no ClerkJS; copied to js/auth.js)
+js-src/auth.js  (auth SOURCE — raw Clerk REST API, no SDK; copied to js/auth.js)
 worker/  (Cloudflare Worker → R2 bucket "SAVE")
 links.txt  (optional first-run seed, one URL per line)
 ```
@@ -78,11 +80,13 @@ unrelated to the app).
 - Permissions: `storage`, `bookmarks`, `cookies`; `host_permissions:
   https://*/*` (direct favicon/title fetches + any https source),
   `https://*.clerk.accounts.dev/*` (the Clerk frontend API: `/v1/me`,
-  session revocation) and `https://*.accounts.dev/*` (the Clerk hosted
-  sign-in page the extension opens + where the `__session` cookie lives,
-  see §3.9). All are covered by the `https://*/*` wildcard today, but they
+  session revocation), `https://*.accounts.dev/*` (Clerk hosted pages),
+  and `https://challenges.cloudflare.com/*` (Turnstile captcha, see
+  §3.17). All are covered by the `https://*/*` wildcard today, but they
   stay explicit in case it is ever narrowed.
-- CSP for extension pages: no inline scripts, `connect-src 'self' https:`.
+- CSP for extension pages: `script-src 'self'` (MV3 restriction — external
+  scripts are loaded via a sandbox page, see `captcha.html` in §3.17);
+  `connect-src 'self' https:`.
 - A pinned `key` (line 6) keeps the extension id stable — churning ids orphan
   all `chrome.storage` data (the settings drawer's Storage chips exist to
   surface exactly this).
@@ -222,7 +226,8 @@ the group currently in view on scroll.
   name from hostname, never overwrites the user's typing.
 - `parseMetaHtml` extracts og:title → twitter:title → `<title>` and up to 8
   `<link rel="icon">` URLs. `META_MAX = 4MB`, 8s abort, per-url cache.
-- Icon picker (`renderIconPicker`): "auto" option (``) plus up to 8 circular
+- Icon picker (`renderIconPicker`): "auto" option (``) plus up to 8
+  circular
   candidates from the same machinery as the grid, plus page-declared icons.
   Picked icon stored on the tile and re-selected on edit.
 - On submit, editing clears url/icon caches when url or icon changed so the
@@ -375,9 +380,10 @@ corners, tabs):
   `needs_identifier` → "no account, try sign-up"; if the API ever asks for a
   factor, a follow-up `prepare_first_factor {strategy:'password'}` is made.
 - **Sign up**: requires a Cloudflare **Turnstile** captcha token (widget
-  rendered in the overlay; script from challenges.cloudflare.com is allowed
-  by the manifest CSP — `captcha_enabled:true` on the instance, no bypass
-  exists). Flow: `POST /v1/client/sign_ups {strategy:'email_code',
+  rendered in the overlay inside a sandboxed iframe — `captcha.html`, see
+  §3.17; the extension page CSP itself can't load it, but the sandbox page
+  has its own relaxed CSP — `captcha_enabled:true` on the instance, no
+  bypass exists). Flow: `POST /v1/client/sign_ups {strategy:'email_code',
   email_address, captchaToken, captchaWidgetType:'smart'}` →
   `prepare_verification {strategy:'email_code'}` sends the code →
   `attempt_verification {strategy:'email_code', code}` verifies →
@@ -457,6 +463,20 @@ dependencies. Run `node scripts/gen-icons.mjs`.
 `WALLHAVEN_API_KEY`. Committed keys in the live `.env` today: the deployed worker URL
 and a wallhaven key — both are public-scope secrets by design (see
 Security). **Never commit real secrets elsewhere.**
+
+### 3.17 `captcha.html` (sandbox page) — Turnstile captcha
+MV3's `extension_pages` CSP only permits `'self'` in `script-src`, so the
+Cloudflare Turnstile widget (`challenges.cloudflare.com`) can never load in
+`newtab.html` itself. `captcha.html` is therefore declared as a **sandbox
+page** in the manifest (`sandbox.pages` with its own relaxed CSP that allows
+`https://challenges.cloudflare.com` for script/frame/connect). `auth.js`
+embeds it as an `<iframe sandbox="allow-scripts allow-forms allow-popups
+allow-modals">` inside `#authCaptcha`; the widget's token is returned to the
+parent via `postMessage` (`{source:'glisters-captcha', type:'token'|'ready'|
+'expired'|'error'}`), and commands (reset) go the other way
+(`{source:'glisters-parent', type:'reset'}`). The iframe is recreated on
+demand (`ensureCaptchaFrame`/`destroyTurnstile`), so no widget is ever left
+mounted on the sign-in tab or after the overlay closes.
 
 ---
 
@@ -642,7 +662,9 @@ so the async merge window can't resurrect them).
 
 - **No HTML injection**: `textContent` for all dynamic strings; static SVG via
   `innerHTML` only.
-- **CSP** in manifest: no inline scripts; only self + https connects; images
+- **CSP** in manifest: `extension_pages` CSP only allows `'self'` in
+  `script-src` (MV3 restriction; external scripts are loaded via a sandbox
+  page, see `captcha.html`). `connect-src 'self' https:`; images
   https/data/blob.
 - **URL guarding**: `normUrl()` in app.js and bookmarks.js only ever navigate
   to `http(s)`/`mailto` — `javascript:`/`data:`/`file:` are dropped

@@ -65,8 +65,9 @@
   var dbJwt = null;                 /* in-memory dev browser token */
   var authStore = { jwt: null, sid: null, exp: 0, email: null };  /* in-memory session */
   var captchaToken = null;          /* latest Turnstile token */
-  var captchaWidgetId = null;       /* Turnstile widget id */
-  var turnstileLoaded = false;      /* script loaded */
+  var captchaFrame = null;          /* the sandboxed captcha iframe */
+  var captchaFrameReady = false;    /* iframe reported ready */
+  var captchaBusy = false;          /* a captcha token request is in flight */
   var turnstileSiteKey = TURNSTILE_SITEKEY;
   var signUpId = null;              /* current sign-up id (during sign-up flow) */
   var verifyEmail = null;           /* email being verified */
@@ -314,61 +315,122 @@
       }).catch(function () { /* keep fallback */ });
   }
 
-  /* ===== Turnstile captcha ===== */
+  /* ===== Turnstile captcha — via a sandboxed iframe =====
+     MV3's extension_pages CSP only allows 'self' in script-src, so the
+     Turnstile widget (challenges.cloudflare.com) can never load in the
+     extension page itself. Instead we load it in captcha.html, which is
+     declared as a sandbox page in the manifest (sandbox pages have their
+     own relaxed CSP) and embedded as an iframe. The widget posts the token
+     back through postMessage; we forward commands (reset) the same way. */
 
-  function loadTurnstile() {
-    if (turnstileLoaded) return Promise.resolve();
-    if (window.turnstile) { turnstileLoaded = true; return Promise.resolve(); }
-    return new Promise(function (resolve) {
-      var s = document.createElement('script');
-      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-      s.async = true;
-      s.onload = function () { turnstileLoaded = true; resolve(); };
-      s.onerror = function () { resolve(); }; /* fail soft */
-      document.head.appendChild(s);
-    });
+  function postToCaptcha(type, payload) {
+    if (!captchaFrame || !captchaFrame.contentWindow) return;
+    try {
+      captchaFrame.contentWindow.postMessage({ source: 'glisters-parent', type: type, payload: payload || null }, '*');
+    } catch (e) { /* best-effort */ }
   }
 
-  function renderTurnstile() {
-    if (captchaWidgetId !== null) return; /* already rendered */
-    if (!window.turnstile || !captchaEl) return;
-    /* wait for the element to be visible */
-    captchaWidgetId = window.turnstile.render(captchaEl, {
-      sitekey: turnstileSiteKey,
-      callback: function (token) { captchaToken = token; },
-      'expired-callback': function () { captchaToken = null; },
-      'error-callback': function () { captchaToken = null; }
-    });
+  function ensureCaptchaFrame() {
+    if (captchaFrame) {
+      /* already exists — just make sure it's attached where we need it */
+      if (captchaEl && captchaFrame.parentNode !== captchaEl) {
+        captchaEl.innerHTML = '';
+        captchaEl.appendChild(captchaFrame);
+      }
+      return Promise.resolve();
+    }
+    if (!captchaEl) return Promise.resolve();
+    try {
+      var frame = document.createElement('iframe');
+      frame.src = chrome.runtime.getURL('captcha.html') + '?sitekey=' + encodeURIComponent(turnstileSiteKey);
+      frame.style.cssText = 'width:300px;height:65px;border:0;display:block;margin:0 auto;background:transparent;';
+      frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
+      frame.setAttribute('title', 'captcha');
+      captchaEl.innerHTML = '';
+      captchaEl.appendChild(frame);
+      captchaFrame = frame;
+      captchaFrameReady = false;
+      /* the iframe posts 'ready' — wait briefly; a token can arrive either way */
+      return new Promise(function (resolve) {
+        var t = setTimeout(function () { captchaFrameReady = true; resolve(); }, 4000);
+        var onReady = function () {
+          if (captchaFrameReady) return;
+          captchaFrameReady = true;
+          clearTimeout(t);
+          resolve();
+        };
+        frame.addEventListener('load', onReady);
+        /* also resolve on the ready message (the global listener sets the flag) */
+        var check = setInterval(function () {
+          if (captchaFrameReady) { clearInterval(check); clearTimeout(t); onReady(); }
+        }, 250);
+      });
+    } catch (e) {
+      return Promise.resolve();
+    }
   }
 
   function destroyTurnstile() {
-    if (captchaWidgetId !== null && window.turnstile) {
-      window.turnstile.remove(captchaWidgetId);
+    if (captchaFrame && captchaFrame.parentNode) {
+      try { captchaFrame.parentNode.removeChild(captchaFrame); } catch (e) { /* noop */ }
     }
-    captchaWidgetId = null;
+    captchaFrame = null;
+    captchaFrameReady = false;
     captchaToken = null;
   }
 
+  /* ask the widget for a fresh token (resets if the old one was consumed) */
+  function refreshCaptcha() {
+    captchaToken = null;
+    postToCaptcha('reset');
+    if (!captchaFrame) {
+      return ensureCaptchaFrame();
+    }
+    return Promise.resolve();
+  }
+
+  /* wait (up to 30s) for a captcha token, resetting the widget once if the
+     first wait times out (a stale widget can silently produce no token) */
   function getCaptchaToken() {
     if (captchaToken) return Promise.resolve(captchaToken);
-    /* trigger the widget explicitly */
-    if (window.turnstile && captchaWidgetId !== null) {
-      window.turnstile.execute(captchaWidgetId);
+    if (captchaBusy) {
+      /* someone else is already waiting — poll for their result */
+      return new Promise(function (resolve, reject) {
+        var waited = 0;
+        var iv = setInterval(function () {
+          waited += 200;
+          if (captchaToken) { clearInterval(iv); resolve(captchaToken); }
+          else if (waited >= 30000) { clearInterval(iv); reject(new Error('CAPTCHA timeout')); }
+        }, 200);
+      });
     }
-    /* wait up to 30s for a callback */
-    return new Promise(function (resolve, reject) {
-      var waited = 0;
-      var interval = setInterval(function () {
-        waited += 200;
-        if (captchaToken) {
-          clearInterval(interval);
-          resolve(captchaToken);
-        } else if (waited >= 30000) {
-          clearInterval(interval);
-          reject(new Error('CAPTCHA timeout'));
-        }
-      }, 200);
-    });
+    captchaBusy = true;
+    var attempts = 0;
+    var doWait = function () {
+      return new Promise(function (resolve, reject) {
+        var waited = 0;
+        var interval = setInterval(function () {
+          waited += 200;
+          if (captchaToken) {
+            clearInterval(interval);
+            captchaBusy = false;
+            resolve(captchaToken);
+          } else if (waited >= 30000) {
+            clearInterval(interval);
+            attempts++;
+            if (attempts < 2) {
+              /* stale widget — reset and try once more */
+              refreshCaptcha();
+              doWait().then(resolve, reject);
+            } else {
+              captchaBusy = false;
+              reject(new Error('CAPTCHA timeout'));
+            }
+          }
+        }, 200);
+      });
+    };
+    return ensureCaptchaFrame().then(doWait);
   }
 
   /* ===== sign-in ===== */
@@ -541,6 +603,7 @@
     if (verifyForm) verifyForm.hidden = true;
     if (tabSignIn) tabSignIn.className = 'auth-tab active';
     if (tabSignUp) tabSignUp.className = 'auth-tab';
+    if (captchaEl) captchaEl.hidden = true;
     destroyTurnstile();
     hideError();
     hideNote();
@@ -552,18 +615,18 @@
     if (verifyForm) verifyForm.hidden = true;
     if (tabSignIn) tabSignIn.className = 'auth-tab';
     if (tabSignUp) tabSignUp.className = 'auth-tab active';
+    if (captchaEl) captchaEl.hidden = false;
     hideError();
     hideNote();
-    /* load Turnstile and render */
-    loadTurnstile().then(function () {
-      renderTurnstile();
-    });
+    /* ensure the sandboxed captcha iframe is ready */
+    ensureCaptchaFrame();
   }
 
   function showVerifyForm(email) {
     if (signInForm) signInForm.hidden = true;
     if (signUpForm) signUpForm.hidden = true;
     if (verifyForm) verifyForm.hidden = false;
+    if (captchaEl) captchaEl.hidden = false;
     if (verifyEmailEl) verifyEmailEl.textContent = email;
     if (tabSignIn) tabSignIn.className = 'auth-tab';
     if (tabSignUp) tabSignUp.className = 'auth-tab active';
@@ -721,6 +784,20 @@
       throw new Error('Sign-up incomplete — missing: ' + missing);
     });
   }
+
+  /* ===== captcha iframe message bridge ===== */
+
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (!d || d.source !== 'glisters-captcha') return;
+    if (d.type === 'token' && d.payload) {
+      captchaToken = d.payload;
+    } else if (d.type === 'ready') {
+      captchaFrameReady = true;
+    } else if (d.type === 'expired' || d.type === 'error') {
+      captchaToken = null;
+    }
+  });
 
   /* ===== boot ===== */
 
