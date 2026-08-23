@@ -1950,9 +1950,11 @@
   /* ---- account (Clerk) UI: the settings drawer's account row ---- */
 
   /* the hosted sign-in pages for this Clerk instance live on dead vercel.app
-     subdomains (accounts.morphica-nine.vercel.app), so the popup flow can't
-     work — AUTH.signIn renders Clerk's own sign-in component into
-     #acctSignInForm instead (all its API calls go through the proxy). */
+     subdomains (accounts.morphica-nine.vercel.app), and the Clerk API refuses
+     to start the OAuth verification for extension clients, so the extension
+     does not run ClerkJS at all — AUTH.signIn renders a Google button that
+     opens the morphica web app's working sign-in page in a new tab; the
+     resulting __session cookie is read via chrome.cookies (see js-src/auth.js) */
   function hideSignInForm() {
     if (acctSignInForm && !acctSignInForm.hidden) {
       if (window.AUTH && window.AUTH.unmountSignIn) window.AUTH.unmountSignIn(acctSignInForm);

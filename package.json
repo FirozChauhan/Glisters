@@ -18,10 +18,6 @@
   },
   "homepage": "https://github.com/FirozChauhan/Glisters#readme",
   "private": "true",
-  "dependencies": {
-    "@clerk/chrome-extension": "^3.1.74"
-  },
-  "devDependencies": {
-    "esbuild": "^0.28.2"
-  }
+  "dependencies": {},
+  "devDependencies": {}
 }

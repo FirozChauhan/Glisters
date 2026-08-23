@@ -102,7 +102,7 @@ styles; unauthenticated requests cannot read or write anything.
 
 ## Run Locally
 
-Node ≥18 is required for the scripts and the worker; the extension itself is plain script tags — the only npm dependency (the Clerk SDK) is bundled into the local `js/auth.js` by `gen-auth.mjs`, so no remote code ever runs.
+Node ≥18 is required for the scripts and the worker; the extension itself is plain script tags with **zero npm dependencies** — sign-in reads the Clerk `__session` cookie via `chrome.cookies` (no ClerkJS bundle, no remote code ever runs).
 
 ```bash
 # extension — zero-config: loads with no .env; sync just reports "cloud off"
@@ -111,7 +111,7 @@ chrome://extensions → Developer mode → Load unpacked → this folder
 # optional build helpers
 node scripts/gen-icons.mjs    # regenerate icons/ PNGs (zero deps)
 node scripts/gen-config.mjs   # regenerate js/config.js from .env
-node scripts/gen-auth.mjs     # bundle js-src/auth.js + Clerk SDK → js/auth.js
+node scripts/gen-auth.mjs     # copy js-src/auth.js → js/auth.js (no bundling)
 
 # cloud worker — production deploy (binding: R2 bucket "jigar")
 cd worker
@@ -134,7 +134,7 @@ Zero-config: yes. Without `.env`, the grid still renders from baked defaults plu
 ```
 manifest.json             MV3 manifest; new-tab override, pinned key, CSP
 newtab.html               Static shell; loads the six JS modules in order
-js-src/auth.js            Clerk bootstrap source (bundled → js/auth.js, gitignored)
+js-src/auth.js            Cookie-based auth source (copied → js/auth.js, gitignored)
 js/app.js                 Core: grid, vim keys, drag-reorder, modal, sync orchestration
 js/bookmarks.js           Bookmarks sidebar — direct chrome.bookmarks editor
 js/walls.js               Wallhaven pool, favourites, safe wallpaper, blob cache
@@ -142,7 +142,7 @@ js/sync.js                Thin worker client (GET/PUT /save, Bearer JWT)
 js/config.js              Generated runtime config (worker URL, wallhaven key, publishable key)
 worker/src/index.js       Worker: JWT auth, per-user LWW + seed guard, prev rotation, /backup, /meta
 scripts/gen-config.mjs    Regenerates js/config.js from .env
-scripts/gen-auth.mjs      Bundles js-src/auth.js → js/auth.js (esbuild)
+scripts/gen-auth.mjs      Copies js-src/auth.js → js/auth.js (no esbuild)
 links.txt                 Optional first-run seed, one URL per line
 ```
 

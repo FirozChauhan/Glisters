@@ -37,8 +37,9 @@ Key characteristics:
 manifest.json  →  newtab.html  (Chrome newtab override)
                       │  loads in order:
                       ├─ js/config.js     (runtime constants; generated)
-                      ├─ js/auth.js       (window.AUTH — Clerk session; BUNDLED,
-                      │                     generated from js-src/auth.js)
+                      ├─ js/auth.js       (window.AUTH — Clerk session via
+                      │                     __session cookie; generated,
+                      │                     plain copy from js-src/auth.js)
                       ├─ js/sync.js       (window.SYNC — cloud push/pull, JWT)
                       ├─ js/walls.js      (window.WALLS — wallpapers)
                       ├─ js/bookmarks.js  (window.BOOKMARKS — sidebar)
@@ -46,7 +47,7 @@ manifest.json  →  newtab.html  (Chrome newtab override)
 css/main.css, css/bookmarks.css   (theme: tokens in :root)
 icons/  (generated 16/48/128 PNGs)
 scripts/gen-config.mjs / gen-auth.mjs / gen-icons.mjs  (Node build helpers)
-js-src/auth.js  (Clerk bootstrap SOURCE — esbuild-bundled to js/auth.js)
+js-src/auth.js  (auth SOURCE — cookie-based, no ClerkJS; copied to js/auth.js)
 worker/  (Cloudflare Worker → R2 bucket "SAVE")
 links.txt  (optional first-run seed, one URL per line)
 ```
@@ -350,16 +351,30 @@ shared `'glisters-icons'` persisted cache (self-contained by design).
 **The dead-domain gotcha**: the Morphica Clerk publishable key embeds
 `clerk.morphica-nine.vercel.app` as its frontend API — a subdomain that
 cannot exist (`*.vercel.app` doesn't allow subdomains), so ClerkJS requests
-fail with ERR_CONNECTION_CLOSED. `js-src/auth.js` therefore routes every
-Clerk call through `CONFIG.clerkProxyUrl` (the instance's real proxy
-`https://morphica-nine.vercel.app/__clerk` — the same workaround the morphica
-web app uses). If the proxy is ever removed/renamed, auth breaks: the
-extension must reach the Clerk frontend API somehow.
+fail with ERR_CONNECTION_CLOSED. The extension therefore does NOT run
+ClerkJS at all — see the auth flow below.
+
+**The cookie-based auth flow (no ClerkJS)**: the Clerk API on this instance
+refuses to start the OAuth verification for extension clients (the sign-in
+`create` always returns `needs_identifier` without a verification URL, and
+`oauth/authorize` 401s), and the hosted popup pages live on dead vercel.app
+subdomains, so the SDK is unusable from the extension. Instead the user signs
+in through the **morphica web app's own working Google OAuth flow**
+(`https://morphica-nine.vercel.app/sign-in` — same Clerk project, same user
+pool). That flow sets the HTTP-only `__session` cookie on the morphica
+domain, which `js-src/auth.js` reads with the privileged `chrome.cookies`
+API (`cookies` permission + `https://morphica-nine.vercel.app/*` host
+permission are already in the manifest). The cookie value IS the Clerk
+session JWT the worker verifies, so sync works with zero extra plumbing.
+Sign-in/out elsewhere updates the extension live via `chrome.cookies.onChanged`
+plus a 30s polling fallback. If the morphica web app is ever removed/renamed,
+auth breaks: the extension must reach a working Clerk sign-in page
+somewhere.
 
 `js/auth.js` is also generated — from `js-src/auth.js` via
-`node scripts/gen-auth.mjs` (esbuild bundles the Clerk SDK in; the extension
-ships plain script tags with a strict CSP, so the only npm dep is compiled
-into a local file). It is gitignored like `config.js`. Never hand-edit it.
+`node scripts/gen-auth.mjs`. It is a plain copy (no bundling, no npm deps —
+the extension ships no ClerkJS bundle at all), stamped with a timestamp. It
+is gitignored like `config.js`. Never hand-edit it.
 
 ### 3.10 `worker/src/index.js` (~270 lines) — Cloudflare Worker
 - **Auth**: every `/save` and `/backup` request must carry
