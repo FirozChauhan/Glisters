@@ -84,7 +84,15 @@ if (!KEY) {
   emit();
 } else {
   try {
-    clerk = createClerkClient({ publishableKey: KEY });
+    /* the publishable key embeds a *dead* frontend-api domain
+       (clerk.morphica-nine.vercel.app — vercel.app subdomains can't exist), so
+       all API calls go through the instance's reachable proxy URL instead
+       (the same workaround the morphica web app uses). Without this, every
+       request fails with ERR_CONNECTION_CLOSED. */
+    clerk = createClerkClient({
+      publishableKey: KEY,
+      proxyUrl: String(CONFIG.clerkProxyUrl || 'https://morphica-nine.vercel.app/__clerk')
+    });
   } catch (e) {
     api.ready = true;
     emit();

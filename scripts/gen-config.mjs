@@ -32,6 +32,9 @@ const cfg = {
   worker: env.R2_WORKER_URL.replace(/\/+$/, ''),
   wallhavenKey: env.WALLHAVEN_API_KEY ? env.WALLHAVEN_API_KEY.trim() : '',
   publishableKey: env.CLERK_PUBLISHABLE_KEY ? env.CLERK_PUBLISHABLE_KEY.trim() : '',
+  /* reachable Clerk frontend API (the pk embeds a dead vercel.app subdomain;
+     auth.js routes all Clerk calls through this proxy — see js-src/auth.js) */
+  clerkProxyUrl: env.CLERK_PROXY_URL ? env.CLERK_PROXY_URL.trim().replace(/\/+$/, '') : '',
   generatedAt: new Date().toISOString()
 };
 
@@ -39,3 +42,4 @@ writeFileSync(resolve(root, 'js/config.js'), 'window.CONFIG = ' + JSON.stringify
 console.log('wrote js/config.js');
 console.log('worker: ' + cfg.worker);
 console.log('clerk publishable key: ' + (cfg.publishableKey ? 'set' : 'NOT SET (sync stays sign-in-gated / off)'));
+console.log('clerk proxy url: ' + (cfg.clerkProxyUrl || 'NOT SET (auth.js falls back to the morphica proxy)'));

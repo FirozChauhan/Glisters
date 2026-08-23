@@ -75,10 +75,12 @@ unrelated to the app).
 ### 3.1 `manifest.json`
 - MV3; `chrome_url_overrides.newtab → newtab.html`.
 - Permissions: `storage`, `bookmarks`, `cookies`; `host_permissions:
-  https://*/*` (direct favicon/title fetches + any https source) and
-  `https://*.clerk.accounts.dev/*` (the Clerk OAuth popup / session domain;
-  redundant with `https://*/*` today but explicit for when the wildcard is
-  narrowed).
+  https://*/*` (direct favicon/title fetches + any https source),
+  `https://*.clerk.accounts.dev/*` (the Clerk OAuth popup / session domain)
+  and `https://morphica-nine.vercel.app/*` (the Clerk frontend-api PROXY the
+  extension actually talks to — the pk embeds a dead vercel.app subdomain,
+  see §3.9). All three are covered by the `https://*/*` wildcard today, but
+  they stay explicit in case it is ever narrowed.
 - CSP for extension pages: no inline scripts, `connect-src 'self' https:`.
 - A pinned `key` (line 6) keeps the extension id stable — churning ids orphan
   all `chrome.storage` data (the settings drawer's Storage chips exist to
@@ -342,8 +344,17 @@ Favicon resolution duplicates app.js's official-icon map + candidates + the
 shared `'glisters-icons'` persisted cache (self-contained by design).
 
 ### 3.9 `js/config.js` (generated) / `js/config.example.js`
-`window.CONFIG = { worker, wallhavenKey?, publishableKey?, generatedAt }`.
-`config.example.js` is a stub. Never hand-edit `config.js`.
+`window.CONFIG = { worker, wallhavenKey?, publishableKey?, clerkProxyUrl?,
+ generatedAt }`. `config.example.js` is a stub. Never hand-edit `config.js`.
+
+**The dead-domain gotcha**: the Morphica Clerk publishable key embeds
+`clerk.morphica-nine.vercel.app` as its frontend API — a subdomain that
+cannot exist (`*.vercel.app` doesn't allow subdomains), so ClerkJS requests
+fail with ERR_CONNECTION_CLOSED. `js-src/auth.js` therefore routes every
+Clerk call through `CONFIG.clerkProxyUrl` (the instance's real proxy
+`https://morphica-nine.vercel.app/__clerk` — the same workaround the morphica
+web app uses). If the proxy is ever removed/renamed, auth breaks: the
+extension must reach the Clerk frontend API somehow.
 
 `js/auth.js` is also generated — from `js-src/auth.js` via
 `node scripts/gen-auth.mjs` (esbuild bundles the Clerk SDK in; the extension
