@@ -1,0 +1,27 @@
+{
+  "name": "glisters",
+  "version": "1.0.0",
+  "description": "Keyboard-first new tab extension (multi-user)",
+  "scripts": {
+    "gen-config": "node scripts/gen-config.mjs",
+    "gen-auth": "node scripts/gen-auth.mjs",
+    "gen-icons": "node scripts/gen-icons.mjs",
+    "build": "npm run gen-config && npm run gen-auth && npm run gen-icons"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FirozChauhan/Glisters.git"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/FirozChauhan/Glisters/issues"
+  },
+  "homepage": "https://github.com/FirozChauhan/Glisters#readme",
+  "private": "true",
+  "dependencies": {
+    "@clerk/chrome-extension": "^3.1.74"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

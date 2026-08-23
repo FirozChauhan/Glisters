@@ -4,6 +4,13 @@
   var CF = window.CONFIG || {};
   var SYNC_ENABLED = !!(CF.worker || CF.endpoint);
 
+  /* Clerk auth (window.AUTH from js/auth.js) — cloud sync is per-user, so it
+     is a no-op until a user is signed in; the grid stays fully local then.
+     authReady() = a publishable key is configured and the client loaded;
+     signedIn() = an active session exists (the worker will accept our JWT). */
+  function authReady() { var A = window.AUTH; return !!(A && A.enabled && A.ready); }
+  function signedIn() { var A = window.AUTH; return !!(A && A.enabled && A.ready && A.isSignedIn); }
+
   var STORE_KEY = 'glisters';
   var SEED_FLAG_KEY = 'glisters-seed'; /* persists that local state came from links.txt */
   var SEED_VERSION = 2; /* bump when links.txt should re-seed existing installs */
@@ -113,6 +120,7 @@
       drawerBody = $('#drawerBody'),
       iconPicker = $('#iconPicker'), metaStatus = $('#metaStatus'),
       syncNow = $('#syncNow'), resetSettings = $('#resetSettings'),
+      acctEmail = $('#acctEmail'), acctSignIn = $('#acctSignIn'), acctSignOut = $('#acctSignOut'),
       emptyAdd = $('#emptyAdd');
 
   /* ------------------------------------------------------------------ state */
@@ -1787,6 +1795,7 @@
     if (mono.checked !== s.mono) mono.checked = s.mono;
     var wallMono = $('#set-wallMono');
     if (wallMono && wallMono.checked !== s.wallMono) wallMono.checked = s.wallMono;
+    syncAccountUI();
   }
 
   function setRangeVal(key, v) {
@@ -1875,7 +1884,14 @@
 
   emptyAdd.addEventListener('click', function () { openModal(null); });
 
-  syncNow.addEventListener('click', pushCloud);
+  syncNow.addEventListener('click', function () {
+    /* not signed in yet — a click on sync now offers the sign-in flow */
+    if (!signedIn() && authReady() && window.AUTH && window.AUTH.signIn) {
+      window.AUTH.signIn();
+      return;
+    }
+    pushCloud();
+  });
 
   /* one-click JSON download of the whole save — the standing insurance
      against any future wipe/clobber. Keep a copy somewhere outside the
@@ -1923,6 +1939,47 @@
     if (pill) pill.className = 'sync-pill ' + kind;
   }
 
+  /* ---- account (Clerk) UI: the settings drawer's account row ---- */
+
+  function syncAccountUI() {
+    var A = window.AUTH;
+    var u = A && A.user;
+    if (acctEmail) {
+      if (A && A.isSignedIn && u) acctEmail.textContent = u.name || u.email || 'signed in';
+      else if (A && A.enabled) acctEmail.textContent = 'not signed in';
+      else acctEmail.textContent = 'not configured';
+    }
+    if (acctSignIn) acctSignIn.hidden = !!(A && A.isSignedIn);
+    if (acctSignOut) acctSignOut.hidden = !(A && A.isSignedIn);
+  }
+
+  /* AUTH.onChange fires immediately on subscribe (with the current state) and
+     on every sign-in / sign-out / session restore — this is the single entry
+     that (re)runs cloud sync per user. */
+  function onAuthChange() {
+    var A = window.AUTH;
+    if (!A) return;
+    syncAccountUI();
+    if (!A.enabled) { setSyncStatus('off', 'cloud off'); return; }
+    if (!A.ready) return; /* client still loading — another emit will follow */
+    if (A.isSignedIn) {
+      if (SYNC_ENABLED) syncStart();
+      else setSyncStatus('off', 'cloud off');
+    } else {
+      dirty = false;
+      setSyncStatus('auth', 'sign in to sync');
+    }
+  }
+
+  if (window.AUTH) window.AUTH.onChange(onAuthChange);
+
+  if (acctSignIn) acctSignIn.addEventListener('click', function () {
+    if (window.AUTH && window.AUTH.signIn) window.AUTH.signIn();
+  });
+  if (acctSignOut) acctSignOut.addEventListener('click', function () {
+    if (window.AUTH && window.AUTH.signOut) window.AUTH.signOut();
+  });
+
   /* scheduleCloud marks changes as un-synced and tries to push shortly after
      the last edit. localStorage persists immediately either way — cloud is a
      mirror that re-syncs the moment connectivity returns. */
@@ -1931,6 +1988,7 @@
     dirty = true;
     clearTimeout(cloudTimer);
     clearTimeout(retryTimer);
+    if (!signedIn()) { setSyncStatus('auth', 'sign in to sync'); return; }
     setSyncStatus('syncing', 'syncing…');
     cloudTimer = setTimeout(pushCloud, 1300);
   }
@@ -2008,8 +2066,16 @@
 
   function pushCloud() {
     if (!SYNC_ENABLED) { setSyncStatus('off', 'cloud off'); return Promise.resolve(false); }
+    if (!signedIn()) { setSyncStatus('auth', 'sign in to sync'); return Promise.resolve(false); }
     setSyncStatus('syncing', 'syncing…');
     return window.SYNC.push(doc(), seededFromLinks).then(function (r) {
+      if (r && r.unauthorized) {
+        /* the worker rejected our token — surface the sign-in state and
+           keep the local copy; no retry loop against a dead session */
+        dirty = true;
+        setSyncStatus('auth', 'sign in to sync');
+        return false;
+      }
       if (r && r.conflict) {
         /* the worker rejected the push — a newer save exists. Pull it and
            adopt so the newer changes win instead of being clobbered (the
@@ -2053,7 +2119,7 @@
   });
 
   window.addEventListener('pagehide', function () {
-    if (!SYNC_ENABLED || !dirty) return;
+    if (!SYNC_ENABLED || !dirty || !signedIn()) return;
     window.SYNC.push(doc(), seededFromLinks).catch(function () { /* local copy survives regardless */ });
   });
 
@@ -2097,8 +2163,14 @@
 
   function syncStart() {
     if (!SYNC_ENABLED) { setSyncStatus('off', 'cloud off'); return; }
+    if (!signedIn()) { setSyncStatus('auth', 'sign in to sync'); return; }
     setSyncStatus('syncing', 'fetching…');
     window.SYNC.pull().then(function (remote) {
+      if (remote && remote.unauthorized) {
+        dirty = true;
+        setSyncStatus('auth', 'sign in to sync');
+        return;
+      }
       var hasRealLocal = !seededFromLinks && state.sites.length > 0;
       if (hasRealLocal) {
         if (!remote || remote.version !== SEED_VERSION) { pushCloud(); return; }

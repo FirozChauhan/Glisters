@@ -14,3 +14,4 @@ worker/.dev.vars
 worker/.wrangler/
 worker/.dev.vars
 
+js/auth.js

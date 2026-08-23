@@ -3,35 +3,88 @@
    Fronts the R2 bucket that stores the save file, so the extension never
    needs R2 credentials. The R2 binding (env.SAVE) is Cloudflare-side only.
 
-     GET  /save    → the save file (404 if none)
-     PUT  /save    → overwrite the save file. The previous save is always
-                     kept (rotated to Glisters/save.prev1.json and
-                     save.prev2.json) BEFORE the overwrite, so a clobber
-                     — seed, bug, stale client, malicious PUT — is never
-                     permanent. Pushes flagged X-Glisters-Seed: 1 (a fresh
-                     install seeding from links.txt) are rejected with 409
-                     when a save already exists, so a wiped store can never
-                     overwrite real cloud data — the client then pulls and
-                     adopts the existing save instead.
-     GET  /backup  → the kept previous save(s): { previous, previous2 }
-                     (404 if nothing has ever been overwritten)
+   AUTH (multi-user): every /save and /backup request must carry
+   `Authorization: Bearer <clerk-session-jwt>`. The JWT is verified with
+   @clerk/backend (env.CLERK_SECRET_KEY — `wrangler secret put
+   CLERK_SECRET_KEY`). Everything is namespaced per user:
+
+     Glisters/users/<userId>/save.json        — the save doc
+     Glisters/users/<userId>/save.prev1.json  — kept before every overwrite
+     Glisters/users/<userId>/save.prev2.json  — rotated from prev1
+
+     GET  /save    → the calling user's save (404 if none)
+     PUT  /save    → overwrite the calling user's save. The previous save is
+                     always rotated to prev1/prev2 BEFORE the overwrite, so a
+                     clobber — seed, bug, stale client, malicious PUT — is
+                     never permanent. Pushes flagged X-Glisters-Seed: 1 (a
+                     fresh install seeding from links.txt) are rejected with
+                     409 when a save already exists, so a wiped store can
+                     never overwrite real cloud data — the client then pulls
+                     and adopts the existing save instead.
+     GET  /backup  → the calling user's kept previous save(s):
+                     { previous, previous2 } (404 if never overwritten)
      GET  /meta    → best-effort page metadata (title + icons) for the
                      add/edit modal — fetched server-side so the browser's
-                     CORS rules don't apply; `?url=` must be http(s)
+                     CORS rules don't apply; `?url=` must be http(s).
+                     Public (no auth — no user data involved).
      OPTIONS       → CORS preflight (extension pages are a cross-origin)
+
+   LEGACY MIGRATION: the pre-multi-user save lived at Glisters/save.json.
+   On the first GET /save where the caller has no save yet, that object is
+   claimed — copied into the caller's key, then moved out of the way
+   (deleted + a Glisters/legacy-claimed.json marker written). Whoever signs
+   in first gets the old personal save; every later sign-in starts fresh.
 --------------------------------------------------------------------------- */
 
-const KEY = 'Glisters/save.json';
-const PREV1 = 'Glisters/save.prev1.json';
-const PREV2 = 'Glisters/save.prev2.json';
+import { createClerkClient } from '@clerk/backend';
+
+const LEGACY_KEY = 'Glisters/save.json';
+const LEGACY_CLAIMED = 'Glisters/legacy-claimed.json';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
-  /* X-Glisters-Seed rides on PUT pushes (the seed guard) — it must be
-     preflight-allowable for non-extension (host-permission) callers */
-  'Access-Control-Allow-Headers': 'Content-Type, X-Glisters-Seed',
+  /* X-Glisters-Seed rides on PUT pushes (the seed guard); Authorization is
+     the Clerk session JWT — both must be preflight-allowable */
+  'Access-Control-Allow-Headers': 'Content-Type, X-Glisters-Seed, Authorization',
 };
+
+let clerkClient = null;
+function clerk(env) {
+  /* constructed lazily per isolate; verifyToken fetches + caches JWKS */
+  if (!clerkClient) clerkClient = createClerkClient({ secretKey: env.CLERK_SECRET_KEY || '' });
+  return clerkClient;
+}
+
+function userKey(id) { return 'Glisters/users/' + id + '/save.json'; }
+function prev1Key(id) { return 'Glisters/users/' + id + '/save.prev1.json'; }
+function prev2Key(id) { return 'Glisters/users/' + id + '/save.prev2.json'; }
+
+/* ---- auth: Bearer session JWT -> Clerk user id (or null) -----------------
+   Any invalid/expired/forged token is simply `null` → the route answers 401.
+   The worker is locked down even before CLERK_SECRET_KEY is set (verification
+   fails → 401), which is the point: unauthenticated access is impossible. */
+
+async function authUser(request, env) {
+  const h = String(request.headers.get('authorization') || '');
+  const m = /^Bearer\s+(\S+)$/i.exec(h);
+  if (!m) return null;
+  try {
+    const payload = await clerk(env).verifyToken(m[1]);
+    return (payload && payload.sub) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+const UNAUTHORIZED = new Response('unauthorized — sign in to sync', { status: 401, headers: CORS });
+
+function jsonResponse(body, status) {
+  return new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+    status: status || 200,
+    headers: { ...CORS, 'Content-Type': 'application/json' },
+  });
+}
 
 /* ---- /meta SSRF guard ----------------------------------------------------
    The meta route fetches an arbitrary URL server-side. That is a classic
@@ -91,38 +144,29 @@ export default {
       try { tgt = new URL(target); } catch (e) { /* fall through to reject */ }
       if (!tgt || !/^https?:$/i.test(tgt.protocol) ||
           isPrivateHost(tgt.hostname, tgt.port)) {
-        return new Response(JSON.stringify({ title: '', icons: [] }), {
-          headers: { ...CORS, 'Content-Type': 'application/json' },
-        });
+        return jsonResponse({ title: '', icons: [] });
       }
       try {
         /* redirects are followed manually so every hop re-runs the guard — a
            hostile page can't bounce us to an internal address */
         let cur = tgt;
         let hops = 0;
-        let res = await fetch(cur.href, {
-          redirect: 'manual',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml',
-          },
-        });
+        const UA = {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+        };
+        let res = await fetch(cur.href, { redirect: 'manual', headers: UA });
         while (res.status >= 300 && res.status < 400 && hops < 3) {
           const loc = res.headers.get('location');
           if (!loc) break;
           let next;
           try { next = new URL(loc, cur); } catch (e) { break; }
           if (!/^https?:$/i.test(next.protocol) || isPrivateHost(next.hostname, next.port)) {
-            return new Response(JSON.stringify({ title: '', icons: [] }), {
-              headers: { ...CORS, 'Content-Type': 'application/json' },
-            });
+            return jsonResponse({ title: '', icons: [] });
           }
           cur = next;
           hops++;
-          res = await fetch(cur.href, { redirect: 'manual', headers: {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml',
-          } });
+          res = await fetch(cur.href, { redirect: 'manual', headers: UA });
         }
         if (!res.ok) throw new Error('fetch failed: ' + res.status);
         const cLen = parseInt(res.headers.get('content-length') || '0', 10);
@@ -149,26 +193,25 @@ export default {
           seen[abs] = 1;
           icons.push(abs);
         }
-        return new Response(JSON.stringify({ title, icons }), {
-          headers: { ...CORS, 'Content-Type': 'application/json' },
-        });
+        return jsonResponse({ title, icons });
       } catch (e) {
-        return new Response(JSON.stringify({ title: '', icons: [] }), {
-          headers: { ...CORS, 'Content-Type': 'application/json' },
-        });
+        return jsonResponse({ title: '', icons: [] });
       }
     }
 
+    /* ---- everything below is per-user: verify the session first ---- */
+
+    const userId = await authUser(request, env);
+    if (!userId) return UNAUTHORIZED;
+
     if (url.pathname === '/backup') {
       try {
-        const [p1, p2] = await Promise.all([env.SAVE.get(PREV1), env.SAVE.get(PREV2)]);
+        const [p1, p2] = await Promise.all([env.SAVE.get(prev1Key(userId)), env.SAVE.get(prev2Key(userId))]);
         if (!p1 && !p2) return new Response('no previous save kept yet', { status: 404, headers: CORS });
         const out = {};
         if (p1) { try { out.previous = JSON.parse(await p1.text()); } catch (e) { out.previous = null; } }
         if (p2) { try { out.previous2 = JSON.parse(await p2.text()); } catch (e) { out.previous2 = null; } }
-        return new Response(JSON.stringify(out), {
-          headers: { ...CORS, 'Content-Type': 'application/json' },
-        });
+        return jsonResponse(out);
       } catch (e) {
         return new Response(String((e && e.message) || e), { status: 500, headers: CORS });
       }
@@ -180,13 +223,14 @@ export default {
 
     try {
       if (request.method === 'PUT') {
+        const key = userKey(userId);
         const body = await request.text();
         let incomingAt = 0;
         try { incomingAt = Number((JSON.parse(body).updatedAt) || 0); } catch (e) { /* not JSON */ }
         /* last-write-wins by timestamp, not arrival order: a stale client
            (older updatedAt) must never clobber a newer save. Reject with 409
            so the client re-pulls and adopts the winner instead. */
-        const existing = await env.SAVE.get(KEY);
+        const existing = await env.SAVE.get(key);
         let existingText = null;
         if (existing) {
           /* read the body ONCE — text() drains the stream, so reusing
@@ -204,29 +248,61 @@ export default {
           if (request.headers.get('x-glisters-seed') === '1') {
             return new Response('seed refused — an existing save wins', { status: 409, headers: CORS });
           }
+        } else if (request.headers.get('x-glisters-seed') === '1') {
+          /* brand-new user with no save yet — but the pre-multi-user legacy
+             save may still be unclaimed. Refuse the seed so the client pulls
+             first (which claims the legacy save) instead of seeding over it. */
+          const legacy = await env.SAVE.get(LEGACY_KEY);
+          if (legacy) {
+            return new Response('seed refused — legacy save pending claim', { status: 409, headers: CORS });
+          }
         }
         /* keep the outgoing save BEFORE the overwrite: rotate prev1 → prev2,
            current → prev1. Best-effort — a backup failure must never block
            the write itself. */
         try {
-          const oldPrev1 = await env.SAVE.get(PREV1);
+          const p1 = prev1Key(userId), p2 = prev2Key(userId);
+          const oldPrev1 = await env.SAVE.get(p1);
           if (oldPrev1) {
             let prev1Text = null;
             try { prev1Text = await oldPrev1.text(); } catch (e) { /* skip */ }
-            if (prev1Text != null) await env.SAVE.put(PREV2, prev1Text);
+            if (prev1Text != null) await env.SAVE.put(p2, prev1Text);
           }
-          if (existingText != null) await env.SAVE.put(PREV1, existingText);
+          if (existingText != null) await env.SAVE.put(p1, existingText);
         } catch (e) { /* backup skipped — write continues */ }
-        await env.SAVE.put(KEY, body, { httpMetadata: { contentType: 'application/json' } });
+        await env.SAVE.put(key, body, { httpMetadata: { contentType: 'application/json' } });
         return new Response('ok', { headers: CORS });
       }
 
       if (request.method === 'GET') {
-        const obj = await env.SAVE.get(KEY);
-        if (!obj) return new Response('not found', { status: 404, headers: CORS });
-        return new Response(obj.body, {
-          headers: { ...CORS, 'Content-Type': 'application/json', 'ETag': obj.httpEtag || '' },
-        });
+        const key = userKey(userId);
+        const obj = await env.SAVE.get(key);
+        if (obj) {
+          return new Response(obj.body, {
+            headers: { ...CORS, 'Content-Type': 'application/json', 'ETag': obj.httpEtag || '' },
+          });
+        }
+        /* one-time legacy claim: the pre-multi-user personal save belongs to
+           whoever signs in first. Copy it into the caller's key, then move it
+           out of the way so no later sign-in can claim it too. */
+        const legacy = await env.SAVE.get(LEGACY_KEY);
+        if (legacy) {
+          let text = null;
+          try { text = await legacy.text(); } catch (e) { text = null; }
+          if (text != null) {
+            try {
+              await env.SAVE.put(key, text, { httpMetadata: { contentType: 'application/json' } });
+              await env.SAVE.put(LEGACY_CLAIMED,
+                JSON.stringify({ claimedBy: userId, at: Date.now() }),
+                { httpMetadata: { contentType: 'application/json' } });
+              await env.SAVE.delete(LEGACY_KEY);
+              return new Response(text, {
+                headers: { ...CORS, 'Content-Type': 'application/json' },
+              });
+            } catch (e) { /* claim failed — fall through to 404, retried next pull */ }
+          }
+        }
+        return new Response('not found', { status: 404, headers: CORS });
       }
 
       return new Response('method not allowed', { status: 405, headers: CORS });

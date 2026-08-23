@@ -25,13 +25,17 @@ if (missing.length) {
 }
 
 /* the worker is the only thing config.js needs — it holds the R2 binding, so
-   no credentials ever end up in the extension */
+   no credentials ever end up in the extension. The Clerk publishable key is
+   public by design (it only identifies the Clerk instance); the SECRET key
+   never ships here — it lives in the worker (wrangler secret / .dev.vars). */
 const cfg = {
   worker: env.R2_WORKER_URL.replace(/\/+$/, ''),
   wallhavenKey: env.WALLHAVEN_API_KEY ? env.WALLHAVEN_API_KEY.trim() : '',
+  publishableKey: env.CLERK_PUBLISHABLE_KEY ? env.CLERK_PUBLISHABLE_KEY.trim() : '',
   generatedAt: new Date().toISOString()
 };
 
 writeFileSync(resolve(root, 'js/config.js'), 'window.CONFIG = ' + JSON.stringify(cfg, null, 2) + ';\n');
 console.log('wrote js/config.js');
 console.log('worker: ' + cfg.worker);
+console.log('clerk publishable key: ' + (cfg.publishableKey ? 'set' : 'NOT SET (sync stays sign-in-gated / off)'));

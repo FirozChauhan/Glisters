@@ -709,6 +709,20 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 .switch input:checked + .track::after { transform: translateX(16px); background: #000; }
 .switch input:focus-visible + .track { outline: 1px solid var(--line); outline-offset: 3px; }
 
+.set-row.account-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+.account-box { display: flex; flex-direction: row; align-items: center; gap: 8px; min-width: 0; }
+.account-email {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-2);
+  max-width: 160px;
+}
+
 .set-row.sync-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
 
 .set-row.backup-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
@@ -748,6 +762,10 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 .sync-pill.syncing { background: rgba(251, 191, 36, 0.07); border-color: rgba(251, 191, 36, 0.4); }
 .sync-pill.syncing .sync-dot { background: #fbbf24; animation: blink 1s steps(2) infinite; }
 .sync-pill.syncing .sync-text { color: #fcd34d; }
+
+.sync-pill.auth { background: rgba(96, 165, 250, 0.07); border-color: rgba(96, 165, 250, 0.4); }
+.sync-pill.auth .sync-dot { background: #60a5fa; box-shadow: 0 0 6px rgba(96, 165, 250, 0.7); }
+.sync-pill.auth .sync-text { color: #93c5fd; }
 
 .sync-pill.ready .sync-dot { background: var(--muted); }
 .sync-pill.ready .sync-text { color: var(--muted); }
