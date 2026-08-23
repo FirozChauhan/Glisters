@@ -599,10 +599,15 @@
         }
         if (!sess) sess = sessions[0];
         if (!sess || !sess.id) throw new Error('No active session to recover');
-        return apiFetch('/v1/client/sessions/' + sess.id + '/tokens', { method: 'POST' })
+        /* fallback: the client's own last_active_token (may be older than a
+           fresh mint but still worth trying if /tokens refuses) */
+        var fallbackJwt = sess.last_active_token;
+        if (fallbackJwt && typeof fallbackJwt === 'object') fallbackJwt = fallbackJwt.jwt || null;
+        return apiFetch('/v1/client/sessions/' + sess.id + '/tokens', { method: 'POST', headers: headers })
           .then(function (r2) { return r2.json(); })
           .then(function (td) {
             var jwt = td && (td.jwt || (td.response && td.response.jwt));
+            if (!jwt && fallbackJwt) jwt = fallbackJwt;
             if (!jwt) throw new Error('No session token returned');
             return finishSession(sess, jwt);
           });
