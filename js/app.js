@@ -71,7 +71,7 @@
     version: SEED_VERSION,
     updatedAt: 0,
     sites: DEFAULT_SITES.slice(),
-    settings: { iconSize: 72, colGap: 24, rowGap: 22, cols: 6, rows: 5, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 480, drWidth: 320, mono: false, wallMono: false, blur: 0 }
+    settings: { iconSize: 72, colGap: 24, rowGap: 22, cols: 6, rows: 5, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 400, drWidth: 400, mono: false, wallMono: false, blur: 0 }
   };
 
   var saved = readLocal();
@@ -316,8 +316,8 @@
     grid.style.setProperty('--colgap', s.colGap + 'px');
     grid.style.setProperty('--rowgap', s.rowGap + 'px');
     /* panel widths ride on the root so the side panels (outside grid) read them */
-    document.documentElement.style.setProperty('--bk-width', (s.bkWidth || 480) + 'px');
-    document.documentElement.style.setProperty('--dr-width', (s.drWidth || 320) + 'px');
+    document.documentElement.style.setProperty('--bk-width', (s.bkWidth || 400) + 'px');
+    document.documentElement.style.setProperty('--dr-width', (s.drWidth || 400) + 'px');
     grid.style.setProperty('--cols', String(s.cols));
     grid.style.gridAutoRows = (s.iconSize + (s.labels ? 24 : 0)) + 'px';
     if (s.labels) grid.classList.remove('tile-label-off');

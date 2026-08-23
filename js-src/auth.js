@@ -952,7 +952,10 @@
           throw new Error(msg);
         }
         var resp = d.response || d;
-        var verified = resp.status === 'verified' || (resp.verification && resp.verification.status === 'verified');
+        /* the sign-up's own status stays 'missing_requirements' until the
+           password step — verification lives under verifications.email_address */
+        var emailVer = resp.verifications && resp.verifications.email_address;
+        var verified = !!emailVer && emailVer.status === 'verified';
         if (!verified) {
           throw new Error('Email verification failed — try the code again.');
         }
