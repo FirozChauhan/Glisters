@@ -16,3 +16,6 @@ worker/.dev.vars
 
 # js/config.js + js/auth.js are COMMITTED (public-scope values only) so
 # GitHub clones work out of the box; js/auth.js is a plain copy of js-src/auth.js
+
+# release zips
+/dist/
