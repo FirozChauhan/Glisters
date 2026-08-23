@@ -6,18 +6,22 @@
  * publishable key or a missing cookie must never break the grid.
  *
  * HOW SIGN-IN WORKS (why there is no ClerkJS bundle):
- *   The Clerk instance's domains are partially dead (see AGENTS.md §3.9) and
- *   its API refuses to start the OAuth verification for extension clients, so
- *   the extension does NOT run the Clerk SDK. Instead the user signs in
- *   through the morphica web app's own working Google OAuth flow
- *   (https://morphica-nine.vercel.app/sign-in — same Clerk project, same user
- *   pool). That flow sets the HTTP-only `__session` cookie on the morphica
- *   domain, which this module reads with the privileged chrome.cookies API
- *   (permissions already in the manifest). The cookie value IS the Clerk
- *   session JWT that the worker verifies, so `Authorization: Bearer <jwt>`
- *   works with zero extra plumbing. Cookie changes (sign-in on the web app,
- *   sign-out elsewhere) are picked up live via chrome.cookies.onChanged plus
- *   a polling fallback.
+ *   This extension has its OWN dedicated Clerk project (a test instance while
+ *   developing — see AGENTS.md §3.9). Clerk's API refuses to start the OAuth
+ *   verification for extension clients, so the extension does not run the SDK
+ *   itself. Instead it opens the instance's hosted sign-in page in a new tab
+ *   (`https://<instance>.accounts.dev/sign-in` — Clerk's own domain, branded
+ *   "glisters", normal browser flow, Google OAuth). That flow sets the
+ *   HTTP-only `__session` cookie on the hosted domain, which this module reads
+ *   with the privileged chrome.cookies API (permissions already in the
+ *   manifest). The cookie value IS the Clerk session JWT the worker verifies,
+ *   so `Authorization: Bearer <jwt>` works with zero extra plumbing. Cookie
+ *   changes (sign-in / sign-out / session rotation) are picked up live via
+ *   chrome.cookies.onChanged plus a 30s polling fallback.
+ *
+ * Domains are DERIVED from the publishable key so the same code works for any
+ * Clerk instance: the pk base64-encodes `<instance>.clerk.accounts.dev`; the
+ * hosted (Account Portal) pages live on `<instance>.accounts.dev`.
  *
  * Contract consumed by app.js / sync.js:
  *   AUTH.ready      bool                — true once the boot cookie check ran
@@ -26,7 +30,7 @@
  *   AUTH.user       {id,email,name,imageUrl} | null  (fetched from /v1/me)
  *   AUTH.getToken() Promise<string|null>  — session JWT for the worker
  *   AUTH.signIn(el) renders a "Continue with Google" button that opens the
- *                   morphica web app's sign-in page in a new tab
+ *                   Clerk hosted sign-in page in a new tab
  *   AUTH.unmountSignIn(el)  removes the button
  *   AUTH.signOut()  removes the Clerk cookies (best-effort server revoke)
  *   AUTH.onChange(fn) subscribe — fn(snapshot) fires immediately with the
@@ -37,11 +41,31 @@
 
   var CONFIG = window.CONFIG || {};
   var KEY = String(CONFIG.publishableKey || '');
-  var AUTH_BASE = 'https://morphica-nine.vercel.app';
-  var PROXY = String(CONFIG.clerkProxyUrl || AUTH_BASE + '/__clerk');
+
+  /* ---- derive the Clerk domains from the publishable key ----
+     pk format: pk_test_<base64> / pk_live_<base64>, where the base64 decodes
+     to `<instance>.clerk.accounts.dev$` (the frontend API domain). The hosted
+     sign-in / Account Portal pages live on `<instance>.accounts.dev`. */
+  function deriveFrontendApi() {
+    var parts = KEY.split('_');
+    if (parts.length >= 3) {
+      try {
+        var decoded = atob(parts[parts.length - 1]);
+        if (decoded.indexOf('.') > 0) {
+          return decoded.replace(/\$$/, '');
+        }
+      } catch (e) { /* fall through */ }
+    }
+    /* legacy override (custom frontend API domain, e.g. a proxy) */
+    return String(CONFIG.clerkProxyUrl || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  }
+
+  var FRONTEND = deriveFrontendApi(); /* e.g. tidy-marmoset-1299.clerk.accounts.dev */
+  var HOSTED = FRONTEND.replace(/\.clerk\.accounts\.dev$/, '.accounts.dev'); /* e.g. tidy-marmoset-1299.accounts.dev */
+  var PROTO = 'https://';
+  var COOKIE_URL = PROTO + HOSTED;           /* where the __session cookie lives */
+  var SIGN_IN_URL = COOKIE_URL + '/sign-in'; /* Clerk hosted sign-in page */
   var SESSION_COOKIE = '__session';
-  var COOKIE_URL = AUTH_BASE; /* cookie is host-scoped to the morphica domain */
-  var SIGN_IN_URL = AUTH_BASE + '/sign-in';
   var POLL_MS = 30000;
 
   var listeners = [];
@@ -50,7 +74,7 @@
 
   var api = {
     ready: false,
-    enabled: !!KEY,
+    enabled: !!KEY && !!FRONTEND,
     isSignedIn: false,
     user: null,
     getToken: function () { return Promise.resolve(lastSessionToken); },
@@ -67,7 +91,7 @@
         };
         el.appendChild(btn);
         var hint = document.createElement('p');
-        hint.textContent = 'Opens the morphica sign-in page (same account) in a new tab — complete it there and sync turns on here.';
+        hint.textContent = 'Opens the Glisters sign-in page in a new tab — complete it there and sync turns on here.';
         hint.className = 'acct-google-hint';
         el.appendChild(hint);
       }
@@ -92,8 +116,8 @@
       } catch (e) { /* best-effort */ }
       /* best-effort server-side session revocation (DELETE /v1/client/sessions
          is what ClerkJS calls on sign-out; with the session JWT as Bearer) */
-      if (token) {
-        fetch(PROXY + '/v1/client/sessions', {
+      if (token && FRONTEND) {
+        fetch(PROTO + FRONTEND + '/v1/client/sessions', {
           method: 'DELETE',
           headers: { 'Authorization': 'Bearer ' + token }
         }).catch(function () { /* the local cookie removal already signs out */ });
@@ -142,7 +166,7 @@
   /* user display info (email/name) is not in the session JWT — ask the Clerk
      API for the user object. Fails soft: the account row still shows signed-in. */
   function fetchUser(token) {
-    return fetch(PROXY + '/v1/me', {
+    return fetch(PROTO + FRONTEND + '/v1/me', {
       headers: { 'Authorization': 'Bearer ' + token }
     }).then(function (r) {
       if (!r.ok) return null;
@@ -185,25 +209,25 @@
 
   window.AUTH = api;
 
-  if (!KEY) {
+  if (!KEY || !FRONTEND) {
     /* no publishable key configured — sync stays off, grid fully local */
     api.ready = true;
     emit();
     return;
   }
 
-  /* boot: read the cookie synchronously-ish, then flip ready */
+  /* boot: read the cookie, then flip ready */
   checkSession().then(function () {
     api.ready = true;
     emit();
   });
 
-  /* live updates: signing in/out on the morphica web app (or anywhere the
-     shared cookie changes) while this page is open */
+  /* live updates: signing in/out on the hosted page (or anywhere the shared
+     cookie changes) while this page is open */
   try {
     chrome.cookies.onChanged.addListener(function (changeInfo) {
       if (changeInfo && changeInfo.cookie &&
-          changeInfo.cookie.domain === 'morphica-nine.vercel.app' &&
+          changeInfo.cookie.domain === HOSTED &&
           changeInfo.cookie.name === SESSION_COOKIE) {
         checkSession();
       }

@@ -77,11 +77,11 @@ unrelated to the app).
 - MV3; `chrome_url_overrides.newtab → newtab.html`.
 - Permissions: `storage`, `bookmarks`, `cookies`; `host_permissions:
   https://*/*` (direct favicon/title fetches + any https source),
-  `https://*.clerk.accounts.dev/*` (the Clerk OAuth popup / session domain)
-  and `https://morphica-nine.vercel.app/*` (the Clerk frontend-api PROXY the
-  extension actually talks to — the pk embeds a dead vercel.app subdomain,
-  see §3.9). All three are covered by the `https://*/*` wildcard today, but
-  they stay explicit in case it is ever narrowed.
+  `https://*.clerk.accounts.dev/*` (the Clerk frontend API: `/v1/me`,
+  session revocation) and `https://*.accounts.dev/*` (the Clerk hosted
+  sign-in page the extension opens + where the `__session` cookie lives,
+  see §3.9). All are covered by the `https://*/*` wildcard today, but they
+  stay explicit in case it is ever narrowed.
 - CSP for extension pages: no inline scripts, `connect-src 'self' https:`.
 - A pinned `key` (line 6) keeps the extension id stable — churning ids orphan
   all `chrome.storage` data (the settings drawer's Storage chips exist to
@@ -348,28 +348,37 @@ shared `'glisters-icons'` persisted cache (self-contained by design).
 `window.CONFIG = { worker, wallhavenKey?, publishableKey?, clerkProxyUrl?,
  generatedAt }`. `config.example.js` is a stub. Never hand-edit `config.js`.
 
-**The dead-domain gotcha**: the Morphica Clerk publishable key embeds
-`clerk.morphica-nine.vercel.app` as its frontend API — a subdomain that
-cannot exist (`*.vercel.app` doesn't allow subdomains), so ClerkJS requests
-fail with ERR_CONNECTION_CLOSED. The extension therefore does NOT run
-ClerkJS at all — see the auth flow below.
+**Dedicated Clerk instance — no morphica, no proxy**: the extension has its
+OWN Clerk project (a test instance today: app "glisters", instance id
+`ins_3IIf1c86bRb7ZBuC8Ucy9yDkZdC`). The publishable key's domain is real
+(`tidy-marmoset-1299.clerk.accounts.dev`), so no proxy is needed —
+`CLERK_PROXY_URL` is only an optional override for a dead/custom pk domain
+and is empty in the current `.env`.
 
-**The cookie-based auth flow (no ClerkJS)**: the Clerk API on this instance
-refuses to start the OAuth verification for extension clients (the sign-in
-`create` always returns `needs_identifier` without a verification URL, and
-`oauth/authorize` 401s), and the hosted popup pages live on dead vercel.app
-subdomains, so the SDK is unusable from the extension. Instead the user signs
-in through the **morphica web app's own working Google OAuth flow**
-(`https://morphica-nine.vercel.app/sign-in` — same Clerk project, same user
-pool). That flow sets the HTTP-only `__session` cookie on the morphica
-domain, which `js-src/auth.js` reads with the privileged `chrome.cookies`
-API (`cookies` permission + `https://morphica-nine.vercel.app/*` host
-permission are already in the manifest). The cookie value IS the Clerk
-session JWT the worker verifies, so sync works with zero extra plumbing.
-Sign-in/out elsewhere updates the extension live via `chrome.cookies.onChanged`
-plus a 30s polling fallback. If the morphica web app is ever removed/renamed,
-auth breaks: the extension must reach a working Clerk sign-in page
-somewhere.
+**The cookie-based auth flow (no ClerkJS)**: the Clerk API refuses to start
+OAuth verification for extension clients (the sign-in `create` always returns
+`needs_identifier` without a verification URL, and `oauth/authorize` 401s —
+reproduced on both the old and new instances), so the SDK is unusable from
+the extension and no ClerkJS ships in it. Instead `js-src/auth.js` derives
+the instance's domains from the publishable key (the pk base64-decodes to
+`<instance>.clerk.accounts.dev`; hosted pages live on
+`<instance>.accounts.dev`) and opens the **Clerk hosted sign-in page**
+(`https://tidy-marmoset-1299.accounts.dev/sign-in` — Clerk's own domain, a
+normal browser flow, Google OAuth already enabled on the instance) in a new
+tab. That flow sets the HTTP-only `__session` cookie on the hosted domain,
+which the extension reads with the privileged `chrome.cookies` API (`cookies`
+permission + `https://*/*` host permission are already in the manifest). The
+cookie value IS the Clerk session JWT the worker verifies, so sync works with
+zero extra plumbing. Sign-in/out updates the extension live via
+`chrome.cookies.onChanged` plus a 30s polling fallback; the account row's
+user info comes from `GET {frontend}/v1/me` with the JWT as Bearer (CORS
+verified from the extension origin). The extension never touches morphica's
+domain or cookies — the two Clerk projects are fully separate.
+
+`js/auth.js` is also generated — from `js-src/auth.js` via
+`node scripts/gen-auth.mjs`. It is a plain copy (no bundling, no npm deps —
+the extension ships no ClerkJS bundle at all), stamped with a timestamp. It
+is gitignored like `config.js`. Never hand-edit it.
 
 `js/auth.js` is also generated — from `js-src/auth.js` via
 `node scripts/gen-auth.mjs`. It is a plain copy (no bundling, no npm deps —
