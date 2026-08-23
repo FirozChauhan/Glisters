@@ -311,14 +311,14 @@
       .then(function (d) {
         var env = (d && d.response) || d || {};
         var dc = env.display_config || {};
+      /* captcha is disabled when the public key is null (dashboard → security) */
         if (dc.captcha_public_key) {
           turnstileSiteKey = dc.captcha_public_key;
+          captchaRequired = true;
+        } else {
+          captchaRequired = false;
         }
-        /* captcha may be disabled on the instance (dashboard → security) —
-           if so, sign-up needs no token and we skip the widget entirely */
-        if (typeof env.captcha_enabled === 'boolean') captchaRequired = env.captcha_enabled;
-        if (env.captcha && typeof env.captcha.enabled === 'boolean') captchaRequired = env.captcha.enabled;
-        console.log('[auth] captcha required:', captchaRequired, 'sitekey:', turnstileSiteKey);
+        console.log('[auth] captcha required:', captchaRequired, 'sitekey:', dc.captcha_public_key);
       }).catch(function () { /* keep fallback */ });
   }
 
