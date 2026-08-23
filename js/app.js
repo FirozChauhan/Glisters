@@ -72,7 +72,7 @@
     version: SEED_VERSION,
     updatedAt: 0,
     sites: DEFAULT_SITES.slice(),
-    settings: { iconSize: 68, colGap: 28, rowGap: 28, cols: 8, rows: 3, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 500, drWidth: 500, mono: false, wallMono: false, blur: 0 }
+    settings: { iconSize: 68, colGap: 28, rowGap: 28, cols: 8, rows: 3, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 500, drWidth: 500, mono: false, wallMono: false, blur: 0, sig: 'فیروز خان چوہان' }
   };
 
   var saved = readLocal();
@@ -241,6 +241,7 @@
         ? o.settings.labelColor : d.labelColor;
       s.mono = o.settings.mono === true;
       s.wallMono = o.settings.wallMono === true;
+      s.sig = typeof o.settings.sig === 'string' ? String(o.settings.sig).slice(0, 80) : d.sig;
     } else {
       s = Object.assign({}, d);
     }
@@ -855,11 +856,22 @@
       if (focused > pageEnd()) focused = pageEnd();
     }
     applyCssVars();
+    applySig();
     renderGrid();
     updateEmpty();
     renderTileStates();
     /* only touch the drawer's inputs while it's actually open */
     if (drawer && drawer.classList.contains('open')) syncDrawerDisplay();
+  }
+
+  /* bottom-right signature — plain textContent (user/cloud-supplied), with
+     the bidi direction flipped only when the text is actually RTL */
+  function applySig() {
+    var sig = $('#pageSig');
+    if (!sig) return;
+    var t = state.settings.sig == null ? '' : String(state.settings.sig).slice(0, 80);
+    sig.textContent = t;
+    sig.setAttribute('dir', /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(t) ? 'rtl' : 'ltr');
   }
 
   function setFocused(i) {
@@ -1752,7 +1764,7 @@
     mode = open ? 'drawer' : 'none';
     if (open) {
       drawerBody.scrollTop = 0;
-      syncSetNav();
+      showGroup(activeGroup);
       syncDrawerDisplay();
     }
   }
@@ -1767,19 +1779,21 @@
   /* ---- settings section jump-nav: clicking a chip scrolls to its group,
         scrolling highlights the group currently in view ---- */
 
+  /* ---- settings section tabs: only ONE group is visible at a time so the
+        panel stays uncluttered. Clicking a nav chip switches the view. ---- */
+
   var setNav = $('#setNav');
   var setGroups = Array.prototype.slice.call(document.querySelectorAll('.set-group'));
+  var activeGroup = 'layout';
 
-  function syncSetNav() {
-    if (!setNav || !setGroups.length) return;
-    var bodyTop = drawerBody.getBoundingClientRect().top;
-    var current = setGroups[0].id.replace('grp-', '');
+  function showGroup(name) {
+    activeGroup = name;
     for (var g = 0; g < setGroups.length; g++) {
-      if (setGroups[g].getBoundingClientRect().top - bodyTop <= 24) current = setGroups[g].id.replace('grp-', '');
+      setGroups[g].style.display = setGroups[g].id === 'grp-' + name ? '' : 'none';
     }
-    var btns = setNav.querySelectorAll('.set-nav-btn');
+    var btns = setNav ? setNav.querySelectorAll('.set-nav-btn') : [];
     for (var b = 0; b < btns.length; b++) {
-      var on = btns[b].getAttribute('data-scroll') === current;
+      var on = btns[b].getAttribute('data-scroll') === name;
       btns[b].classList.toggle('active', on);
       if (on) btns[b].setAttribute('aria-current', 'true');
       else btns[b].removeAttribute('aria-current');
@@ -1788,10 +1802,8 @@
   if (setNav) setNav.addEventListener('click', function (e) {
     var b = e.target.closest && e.target.closest('.set-nav-btn');
     if (!b) return;
-    var t = document.getElementById('grp-' + b.getAttribute('data-scroll'));
-    if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    showGroup(b.getAttribute('data-scroll'));
   });
-  drawerBody.addEventListener('scroll', syncSetNav);
 
   settingsBtn.addEventListener('click', toggleDrawer);
   drawerClose.addEventListener('click', closeDrawer);
@@ -1818,6 +1830,8 @@
     if (mono.checked !== s.mono) mono.checked = s.mono;
     var wallMono = $('#set-wallMono');
     if (wallMono && wallMono.checked !== s.wallMono) wallMono.checked = s.wallMono;
+    var sigIn = $('#set-sig');
+    if (sigIn && sigIn.value !== (s.sig || '')) sigIn.value = s.sig || '';
     syncAccountUI();
   }
 
@@ -1897,6 +1911,13 @@
 
   $('#labelColorReset').addEventListener('click', function () {
     applySetting('labelColor', DEFAULTS.settings.labelColor);
+  });
+
+  var sigIn = $('#set-sig');
+  if (sigIn) sigIn.addEventListener('change', function (e) {
+    state.settings.sig = String(e.target.value || '').slice(0, 80);
+    applySig();
+    commit({ noRender: true });
   });
 
   resetSettings.addEventListener('click', function () {
