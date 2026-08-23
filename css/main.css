@@ -1201,3 +1201,11 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+/* sign-in button hint — explains the morphica-page sign-in flow */
+.acct-google-hint {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-dim, #999);
+  max-width: 240px;
+}

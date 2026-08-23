@@ -66,6 +66,10 @@
           catch (e) { window.open(SIGN_IN_URL, '_blank', 'noopener'); }
         };
         el.appendChild(btn);
+        var hint = document.createElement('p');
+        hint.textContent = 'Opens the morphica sign-in page (same account) in a new tab — complete it there and sync turns on here.';
+        hint.className = 'acct-google-hint';
+        el.appendChild(hint);
       }
     },
     unmountSignIn: function (el) {
