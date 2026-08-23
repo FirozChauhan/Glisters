@@ -1,5 +1,4 @@
 .env
-js/config.js
 node_modules/
 .freebuff/
 worker/diagnose-jwt.mjs
@@ -15,4 +14,5 @@ worker/.dev.vars
 worker/.wrangler/
 worker/.dev.vars
 
-js/auth.js
+# js/config.js + js/auth.js are COMMITTED (public-scope values only) so
+# GitHub clones work out of the box; js/auth.js is a plain copy of js-src/auth.js

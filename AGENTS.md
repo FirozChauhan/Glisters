@@ -67,12 +67,18 @@ links.txt  (legacy first-run seed override, one URL per line)
 | Runtime | Browser extension (Chrome MV3), plus Node ≥18 for scripts & the Worker |
 | No package.json | correct — nothing to `npm install` for the extension |
 | Git | local git repository (initialized; no remote configured yet) |
-| Secrets | `.env` (gitignored) + `js/config.js` (gitignored, generated) |
+| Secrets | `.env` (gitignored). `js/config.js` is committed (public-scope values only — worker URL, wallhaven key, publishable key) |
 
 `js/config.js` is **generated, never hand-edited** — it is re-written by
-`node scripts/gen-config.mjs` from `.env`. `.gitignore` excludes `.env`,
-`js/config.js`, `node_modules/`, and `.freebuff/` (a local SQLite scratch dir,
-unrelated to the app).
+`node scripts/gen-config.mjs` from `.env`. It is **committed to git** because
+it holds only public-scope values (worker URL, wallhaven key, Clerk
+publishable key) — shipping it means a GitHub clone works out of the box
+(sync + sign-in enabled) instead of a blank "not configured" state. Same for
+`js/auth.js` (a plain copy of `js-src/auth.js` with a generated banner; no
+secrets — the frontend API is derived from the publishable key at runtime).
+The real secret, `CLERK_SECRET_KEY`, stays in `wrangler secret` / `.dev.vars`
+and must never appear in the repo. `.gitignore` excludes `.env`, `node_modules/`,
+and `.freebuff/` (a local SQLite scratch dir, unrelated to the app).
 
 ---
 
