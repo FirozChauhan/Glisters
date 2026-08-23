@@ -478,7 +478,7 @@ kbd {
   z-index: 40;
   display: flex;
   flex-direction: column;
-  background: var(--card);
+  background: #171717;  /* one step above --card so the panel reads as a solid slab against the page */
   border-right: 1px solid var(--line);
   transform: translateX(-100%);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
@@ -542,6 +542,7 @@ kbd {
   text-overflow: ellipsis;
   transition: color 0.15s, border-color 0.15s, background-color 0.15s;
 }
+
 .set-nav-btn:hover { color: var(--fg); border-color: var(--line); }
 .set-nav-btn.active {
   color: #fff;
@@ -550,12 +551,18 @@ kbd {
 }
 .set-nav-btn:focus-visible { outline: 1px solid var(--line); outline-offset: 2px; }
 
+/* no rounded corners anywhere in the settings bar — the theme is sharp */
+.drawer, .drawer * { border-radius: 0 !important; }
+.drawer input[type="range"]::-webkit-slider-thumb,
+.drawer input[type="range"]::-moz-range-thumb { border-radius: 0; }
+.drawer input[type="color"]::-webkit-color-swatch { border-radius: 0; }
+
 /* grouped cards — the section label doubles as the divider */
 .set-group {
   display: flex;
   flex-direction: column;
   gap: 9px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface);  /* distinct card-within-panel so rows don't float */
   border: 1px solid var(--line-soft);
   border-radius: 8px;
   padding: 12px 12px 14px;
