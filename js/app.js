@@ -72,7 +72,7 @@
     version: SEED_VERSION,
     updatedAt: 0,
     sites: DEFAULT_SITES.slice(),
-    settings: { iconSize: 72, colGap: 24, rowGap: 22, cols: 6, rows: 5, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 400, drWidth: 400, mono: false, wallMono: false, blur: 0 }
+    settings: { iconSize: 68, colGap: 28, rowGap: 28, cols: 8, rows: 3, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 500, drWidth: 500, mono: false, wallMono: false, blur: 0 }
   };
 
   var saved = readLocal();

@@ -43,7 +43,9 @@ manifest.json  →  newtab.html  (Chrome newtab override)
                       │   └─ embeds captcha.html  (sandbox page, see §3.17)
                       ├─ js/sync.js       (window.SYNC — cloud push/pull, JWT)
                       ├─ js/walls.js      (window.WALLS — wallpapers)
-                      ├─ js/bookmarks.js  (window.BOOKMARKS — sidebar)
+                      ├─ js/bookmarks.js  (window.BOOKMARKS — bookmarks bar,
+                      │                     the right-edge panel; the settings
+                      │                     bar is the left-edge #drawer panel)
                       └─ js/app.js        (window.CONFIG consumer — grid/core)
 css/main.css, css/bookmarks.css   (theme: tokens in :root)
 captcha.html  (sandbox page — Turnstile captcha; loaded by auth.js)
