@@ -1,6 +1,6 @@
 # Glisters — New Tab
 
-> Minimal keyboard-first new tab — vim shortcut grid, live Chrome bookmarks, Wallhaven wallpapers, Cloudflare sync.
+> Minimal new tab — shortcut grid, live Chrome bookmarks, Wallhaven wallpapers, Cloudflare sync.
 
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES5--style-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
 ![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-4285F4?style=flat-square&logo=google-chrome&logoColor=white)
@@ -18,11 +18,11 @@
 
 ## Why This Project Exists
 
-A new-tab page is dead time and a sync layer is usually a silent data-loss trap. Glisters makes the page fully keyboard-driven and treats the cloud as a hostile boundary where a fresh install must never clobber real data.
+A new-tab page is dead time and a sync layer is usually a silent data-loss trap. Glisters keeps the page snappy and treats the cloud as a hostile boundary where a fresh install must never clobber real data.
 
 ## What It Does
 
-- **Vim shortcut grid** — navigate, open, add, edit, delete every tile with keys only (`h j k l`, `enter`, `a`, `e`, `d`); the mouse stays optional and never steals the address bar (`js/app.js:902`).
+- **Shortcut grid** — navigate, open, add, edit, delete every tile; vim-style keys (`h j k l`, `enter`, `a`, `e`, `d`) are there for the keyboard-inclined, and the mouse stays optional (`js/app.js:902`).
 - **Butter-smooth drag-reorder** — drag a tile and the others FLIP out of the way live, with edge auto-flip across pages; dropping lands the tile exactly where you left it (`js/app.js:1133`).
 - **Live bookmarks sidebar** — a direct editor for Chrome's real bookmarks, written straight through `chrome.bookmarks`; changes from any device appear instantly (`js/bookmarks.js:669`).
 - **Daily wallpaper pool** — 10 wide Wallhaven toplist shots (≥1.5:1) cycled with `w`, favourites capped at 60, and a safe default that survives pool swaps (`js/walls.js:43`).
@@ -40,7 +40,7 @@ Real bounds enforced in code: site names clamped to 300 chars, URLs to 4096, ico
 ```mermaid
 flowchart LR
   A[Chrome new tab] --> B[newtab.html shell]
-  B --> C[app.js - grid, vim keys, drag]
+  B --> C[app.js - grid, shortcuts, drag]
   C --> D[localStorage + chrome.storage.local]
   D --> E[Cloudflare Worker sync]
   E --> F[R2 save.json + prev backups]
@@ -141,7 +141,7 @@ gated) and the NSFW wallpaper option simply stay off.
 manifest.json             MV3 manifest; new-tab override, pinned key, CSP
 newtab.html               Static shell; loads the six JS modules in order
 js-src/auth.js            In-extension auth source (plain copy → js/auth.js, gitignored)
-js/app.js                 Core: grid, vim keys, drag-reorder, modal, sync orchestration
+js/app.js                 Core: grid, drag-reorder, modal, sync orchestration
 js/bookmarks.js           Bookmarks sidebar — direct chrome.bookmarks editor
 js/walls.js               Wallhaven pool, favourites, safe wallpaper, blob cache
 js/sync.js                Thin worker client (GET/PUT /save, Bearer JWT)
@@ -154,7 +154,7 @@ links.txt                 Optional first-run seed, one URL per line
 
 ---
 
-Never lose a save, never lose a favourite, and every tile answers to the keyboard.
+Never lose a save, never lose a favourite.
 
 ---
 
