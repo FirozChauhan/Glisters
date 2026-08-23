@@ -68,6 +68,7 @@
   var captchaFrame = null;          /* the sandboxed captcha iframe */
   var captchaFrameReady = false;    /* iframe reported ready */
   var captchaBusy = false;          /* a captcha token request is in flight */
+  var captchaRequired = true;       /* set from /v1/environment (dashboard bot protection) */
   var turnstileSiteKey = TURNSTILE_SITEKEY;
   var signUpId = null;              /* current sign-up id (during sign-up flow) */
   var verifyEmail = null;           /* email being verified */
@@ -303,15 +304,21 @@
     }).catch(function () { return null; });
   }
 
-  /* ===== fetch Turnstile sitekey from environment ===== */
+  /* ===== fetch Turnstile sitekey + captcha requirement from environment ===== */
 
   function fetchSiteKey() {
     return fetch(API + '/v1/environment').then(function (r) { return r.json(); })
       .then(function (d) {
-        var dc = (d && d.response && d.response.display_config) || (d && d.display_config);
-        if (dc && dc.captcha_public_key) {
+        var env = (d && d.response) || d || {};
+        var dc = env.display_config || {};
+        if (dc.captcha_public_key) {
           turnstileSiteKey = dc.captcha_public_key;
         }
+        /* captcha may be disabled on the instance (dashboard → security) —
+           if so, sign-up needs no token and we skip the widget entirely */
+        if (typeof env.captcha_enabled === 'boolean') captchaRequired = env.captcha_enabled;
+        if (env.captcha && typeof env.captcha.enabled === 'boolean') captchaRequired = env.captcha.enabled;
+        console.log('[auth] captcha required:', captchaRequired, 'sitekey:', turnstileSiteKey);
       }).catch(function () { /* keep fallback */ });
   }
 
@@ -513,16 +520,24 @@
   /* ===== sign-up ===== */
 
   function doSignUp(email, password) {
-    showNote('Verifying captcha…');
-    return getCaptchaToken().then(function (captcha) {
+    var body = {
+      strategy: 'email_code',
+      email_address: email
+    };
+    var p;
+    if (captchaRequired) {
+      showNote('Verifying captcha…');
+      p = getCaptchaToken().then(function (captcha) {
+        body.captchaToken = captcha;
+        body.captchaWidgetType = 'smart';
+      });
+    } else {
+      p = Promise.resolve();
+    }
+    return p.then(function () {
       return apiFetch('/v1/client/sign_ups', {
         method: 'POST',
-        body: JSON.stringify({
-          strategy: 'email_code',
-          email_address: email,
-          captchaToken: captcha,
-          captchaWidgetType: 'smart'
-        })
+        body: JSON.stringify(body)
       });
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (d.errors && d.errors.length) {
@@ -617,18 +632,18 @@
     if (verifyForm) verifyForm.hidden = true;
     if (tabSignIn) tabSignIn.className = 'auth-tab';
     if (tabSignUp) tabSignUp.className = 'auth-tab active';
-    if (captchaEl) captchaEl.hidden = false;
+    if (captchaEl) captchaEl.hidden = !captchaRequired;
     hideError();
     hideNote();
-    /* ensure the sandboxed captcha iframe is ready */
-    ensureCaptchaFrame();
+    /* ensure the sandboxed captcha iframe is ready (only when captcha is on) */
+    if (captchaRequired) ensureCaptchaFrame();
   }
 
   function showVerifyForm(email) {
     if (signInForm) signInForm.hidden = true;
     if (signUpForm) signUpForm.hidden = true;
     if (verifyForm) verifyForm.hidden = false;
-    if (captchaEl) captchaEl.hidden = false;
+    if (captchaEl) captchaEl.hidden = !captchaRequired;
     if (verifyEmailEl) verifyEmailEl.textContent = email;
     if (tabSignIn) tabSignIn.className = 'auth-tab';
     if (tabSignUp) tabSignUp.className = 'auth-tab active';
@@ -761,16 +776,21 @@
       if (!verified) {
         throw new Error('Email verification failed — try the code again.');
       }
-      /* step 2: set password on the sign-up */
-      return getCaptchaToken().then(function (captcha2) {
+      /* step 2: set password on the sign-up (captcha token only if required) */
+      var patchBody = {
+        strategy: 'password',
+        password: password
+      };
+      var patchP = captchaRequired
+        ? getCaptchaToken().then(function (captcha2) {
+            patchBody.captchaToken = captcha2;
+            patchBody.captchaWidgetType = 'smart';
+          })
+        : Promise.resolve();
+      return patchP.then(function () {
         return apiFetch('/v1/client/sign_ups/' + signUpId, {
           method: 'PATCH',
-          body: JSON.stringify({
-            strategy: 'password',
-            password: password,
-            captchaToken: captcha2,
-            captchaWidgetType: 'smart'
-          })
+          body: JSON.stringify(patchBody)
         });
       });
     }).then(function (r) { return r.json(); }).then(function (d) {
