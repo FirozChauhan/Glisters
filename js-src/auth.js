@@ -12,7 +12,10 @@
  *   AUTH.isSignedIn bool
  *   AUTH.user       {id,email,name,imageUrl} | null
  *   AUTH.getToken() Promise<string|null>  — session JWT for the worker (Authorization: Bearer)
- *   AUTH.signIn()   opens Clerk's sign-in popup
+ *   AUTH.signIn(el) mounts Clerk's sign-in UI into the given element (in-page,
+ *                   NOT the popup — this instance's hosted sign-in pages live on
+ *                   dead vercel.app subdomains, see CONFIG.clerkProxyUrl note)
+ *   AUTH.unmountSignIn(el)  unmounts it again
  *   AUTH.signOut()  signs out, returns to the new tab
  *   AUTH.onChange(fn) subscribe — fn(snapshot) fires immediately with the
  *                                 current state, then on every auth change
@@ -35,7 +38,8 @@ var api = {
   isSignedIn: false,
   user: null,
   getToken: function () { return Promise.resolve(null); },
-  signIn: function () {},
+  signIn: function (el) {},
+  unmountSignIn: function (el) {},
   signOut: function () { return Promise.resolve(); },
   onChange: function (fn) {
     listeners.push(fn);
@@ -113,7 +117,30 @@ if (!KEY) {
     api.getToken = function () {
       return clerk && clerk.session ? clerk.session.getToken() : Promise.resolve(null);
     };
-    api.signIn = function () { clerk.openSignIn({}); };
+    /* In-page sign-in. The hosted popup path is DEAD for this instance — its
+       sign-in/sign-up pages live at accounts.morphica-nine.vercel.app (a
+       vercel.app subdomain, which can't exist) — so we render Clerk's own
+       sign-in component into the settings drawer instead. All API calls go
+       through the proxy (works, verified) and Google OAuth authorize through
+       the proxy too. The component handles its own Google/magic-link popup. */
+    api.signIn = function (el) {
+      if (el && clerk.mountSignIn) {
+        try {
+          clerk.mountSignIn(el, {
+            withSignUp: true,
+            forceRedirectUrl: HOME,
+            signUpForceRedirectUrl: HOME
+          });
+          return;
+        } catch (e) { /* fall through to the popup */ }
+      }
+      if (clerk.openSignIn) clerk.openSignIn({});
+    };
+    api.unmountSignIn = function (el) {
+      if (el && clerk.unmountSignIn) {
+        try { clerk.unmountSignIn(el); } catch (e) { /* already gone */ }
+      }
+    };
     api.signOut = function () { return clerk.signOut({ redirectUrl: HOME }); };
     api.ready = true;
     emit();

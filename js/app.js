@@ -121,6 +121,7 @@
       iconPicker = $('#iconPicker'), metaStatus = $('#metaStatus'),
       syncNow = $('#syncNow'), resetSettings = $('#resetSettings'),
       acctEmail = $('#acctEmail'), acctSignIn = $('#acctSignIn'), acctSignOut = $('#acctSignOut'),
+      acctSignInForm = $('#acctSignInForm'),
       emptyAdd = $('#emptyAdd');
 
   /* ------------------------------------------------------------------ state */
@@ -1739,6 +1740,7 @@
     drawer.setAttribute('aria-hidden', 'true');
     scrim.hidden = true;
     mode = 'none';
+    hideSignInForm();
   }
 
   /* ---- settings section jump-nav: clicking a chip scrolls to its group,
@@ -1887,6 +1889,12 @@
   syncNow.addEventListener('click', function () {
     /* not signed in yet — a click on sync now offers the sign-in flow */
     if (!signedIn() && authReady() && window.AUTH && window.AUTH.signIn) {
+      if (acctSignInForm) {
+        acctSignInForm.hidden = false;
+        window.AUTH.signIn(acctSignInForm);
+        syncAccountUI();
+        return;
+      }
       window.AUTH.signIn();
       return;
     }
@@ -1941,15 +1949,28 @@
 
   /* ---- account (Clerk) UI: the settings drawer's account row ---- */
 
+  /* the hosted sign-in pages for this Clerk instance live on dead vercel.app
+     subdomains (accounts.morphica-nine.vercel.app), so the popup flow can't
+     work — AUTH.signIn renders Clerk's own sign-in component into
+     #acctSignInForm instead (all its API calls go through the proxy). */
+  function hideSignInForm() {
+    if (acctSignInForm && !acctSignInForm.hidden) {
+      if (window.AUTH && window.AUTH.unmountSignIn) window.AUTH.unmountSignIn(acctSignInForm);
+      acctSignInForm.hidden = true;
+      acctSignInForm.textContent = '';
+    }
+  }
+
   function syncAccountUI() {
     var A = window.AUTH;
     var u = A && A.user;
+    if (A && A.isSignedIn) hideSignInForm();
     if (acctEmail) {
       if (A && A.isSignedIn && u) acctEmail.textContent = u.name || u.email || 'signed in';
       else if (A && A.enabled) acctEmail.textContent = 'not signed in';
       else acctEmail.textContent = 'not configured';
     }
-    if (acctSignIn) acctSignIn.hidden = !!(A && A.isSignedIn);
+    if (acctSignIn) acctSignIn.hidden = !!(A && A.isSignedIn) || (acctSignInForm && !acctSignInForm.hidden);
     if (acctSignOut) acctSignOut.hidden = !(A && A.isSignedIn);
   }
 
@@ -1974,6 +1995,12 @@
   if (window.AUTH) window.AUTH.onChange(onAuthChange);
 
   if (acctSignIn) acctSignIn.addEventListener('click', function () {
+    if (acctSignInForm && window.AUTH && window.AUTH.signIn) {
+      acctSignInForm.hidden = false;
+      window.AUTH.signIn(acctSignInForm);
+      syncAccountUI();
+      return;
+    }
     if (window.AUTH && window.AUTH.signIn) window.AUTH.signIn();
   });
   if (acctSignOut) acctSignOut.addEventListener('click', function () {

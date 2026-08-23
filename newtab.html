@@ -276,12 +276,15 @@
       <h3 class="set-label">sync</h3>
 
       <div class="set-row account-row">
-        <span class="set-name">Account</span>
-        <div class="account-box">
-          <em class="account-email" id="acctEmail">not signed in</em>
-          <button type="button" class="btn-secondary" id="acctSignIn">sign in</button>
-          <button type="button" class="btn-secondary" id="acctSignOut" hidden>sign out</button>
+        <div class="account-row-top">
+          <span class="set-name">Account</span>
+          <div class="account-box">
+            <em class="account-email" id="acctEmail">not signed in</em>
+            <button type="button" class="btn-secondary" id="acctSignIn">sign in</button>
+            <button type="button" class="btn-secondary" id="acctSignOut" hidden>sign out</button>
+          </div>
         </div>
+        <div id="acctSignInForm" class="acct-signin-form" hidden></div>
       </div>
 
       <div class="set-row sync-row">
