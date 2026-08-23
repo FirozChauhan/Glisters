@@ -77,7 +77,11 @@ async function authUser(request, env) {
   }
 }
 
-const UNAUTHORIZED = new Response('unauthorized — sign in to sync', { status: 401, headers: CORS });
+/* created per-call, NOT at module scope — workerd forbids constructing
+   streams/Response outside a request context (deploy-time error 10021) */
+function unauthorized() {
+  return new Response('unauthorized — sign in to sync', { status: 401, headers: CORS });
+}
 
 function jsonResponse(body, status) {
   return new Response(typeof body === 'string' ? body : JSON.stringify(body), {
@@ -202,7 +206,7 @@ export default {
     /* ---- everything below is per-user: verify the session first ---- */
 
     const userId = await authUser(request, env);
-    if (!userId) return UNAUTHORIZED;
+    if (!userId) return unauthorized();
 
     if (url.pathname === '/backup') {
       try {
