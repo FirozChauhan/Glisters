@@ -81,7 +81,6 @@ kbd {
 --------------------------------------------------------------------------- */
 
 .icon-btn.settings-fab {
-  display: none; /* hotkey s — no on-screen button */
   position: fixed;
   top: 14px;
   left: 14px;
@@ -701,23 +700,6 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 .set-row.account-row { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 10px; }
 .account-box { display: flex; flex-direction: row; align-items: center; gap: 8px; min-width: 0; }
 .account-row-top { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
-/* sign-in is a single Google button that opens the morphica web app's own
-   working OAuth page in a new tab (the extension reads the resulting
-   __session cookie — see js-src/auth.js). */
-.acct-signin-form { width: 100%; padding: 2px 2px 6px; }
-.acct-google-btn {
-  width: 100%;
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 10px 12px;
-  font: 500 13px/1.2 var(--font-sans);
-  color: var(--fg);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  cursor: pointer;
-}
-.acct-google-btn:hover { border-color: var(--fg); }
-.acct-google-btn:active { transform: translateY(1px); }
 .account-email {
   font-style: normal;
   font-family: var(--font-mono);
@@ -1209,14 +1191,6 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-}
-/* sign-in button hint — explains the morphica-page sign-in flow */
-.acct-google-hint {
-  margin: 6px 2px 0;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--fg-dim, #999);
-  max-width: 240px;
 }
 
 /* ---------------------------------------------------------------------------

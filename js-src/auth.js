@@ -87,6 +87,26 @@
   var resendLink, signUpHintLink, signInPasswordHint;
   var authError, authNote;
 
+  /* ------------------------------------------------------------------ public API
+
+     window.AUTH is the guarded auth surface consumed by app.js / sync.js.
+     - ready:      boot finished (session restored / rejected / absent); the
+                   app starts syncing only after this flips true
+     - enabled:    a Clerk key + frontend API are configured (else everything
+                   reads 'not configured' and no network call is ever made)
+     - isSignedIn: session JWT currently held
+     - user:       { name, email } from GET /v1/me, or null
+     - getToken(): Promise<string|null> — current session JWT, refreshing when
+                   near expiry; never rejects
+     - signIn(el): opens the in-extension auth overlay (#authOverlay). The el
+                   arg is a legacy container that is always cleared+hidden (the
+                   overlay replaced the old inline form)
+     - signOut():  clears local auth state and best-effort revokes the Clerk
+                   session server-side
+     - onChange(fn): subscribes a listener; fires immediately with the current
+                   state, then on every sign-in / sign-out / session restore.
+                   Returns an unsubscribe function.
+  -------------------------------------------------------------------------- */
   var api = {
     ready: false,
     enabled: !!KEY && !!FRONTEND,
@@ -827,6 +847,15 @@
     signInTrustStrategy = null;
     signInPassword = null;
     destroyTurnstile();
+    /* return focus somewhere visible: the drawer's first section tab if the
+       settings drawer is open, else the settings launcher */
+    var d = document.getElementById('drawer');
+    if (d && d.classList.contains('open')) {
+      var t = d.querySelector('.set-nav-btn');
+      if (t) { t.focus(); return; }
+    }
+    var fab = document.getElementById('settingsBtn');
+    if (fab) fab.focus();
     /* reset forms */
     if (signInForm) { signInForm.reset(); signInForm.hidden = false; }
     if (signUpForm) { signUpForm.reset(); signUpForm.hidden = true; }

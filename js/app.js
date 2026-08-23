@@ -1754,6 +1754,16 @@
       drawerBody.scrollTop = 0;
       showGroup(activeGroup);
       syncDrawerDisplay();
+      /* move focus into the panel so Tab starts at the section tabs. The
+         grid's key handler returns early while mode === 'drawer', so without
+         this, Tab would wander the page's hidden DOM instead of the panel. */
+      var firstTab = setNav && setNav.querySelector('.set-nav-btn');
+      if (firstTab) firstTab.focus();
+    } else {
+      /* focus never lands on an off-screen element after closing */
+      if (document.activeElement && drawer.contains(document.activeElement)) {
+        settingsBtn.focus();
+      }
     }
   }
   function closeDrawer() {
@@ -1762,6 +1772,10 @@
     scrim.hidden = true;
     mode = 'none';
     hideSignInForm();
+    /* return focus to the settings launcher (or the grid keeps it) */
+    if (document.activeElement && drawer.contains(document.activeElement)) {
+      settingsBtn.focus();
+    }
   }
 
   /* ---- settings section jump-nav: clicking a chip scrolls to its group,

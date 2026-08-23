@@ -7,7 +7,6 @@
 /* ---- left-edge toggle button ---- */
 
 .icon-btn.bk-fab {
-  display: none; /* hotkey b — no on-screen button */
   position: fixed;
   top: 14px;
   right: 14px;

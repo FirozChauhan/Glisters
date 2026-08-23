@@ -86,7 +86,7 @@ and `.freebuff/` (a local SQLite scratch dir, unrelated to the app).
 
 ### 3.1 `manifest.json`
 - MV3; `chrome_url_overrides.newtab → newtab.html`.
-- Permissions: `storage`, `bookmarks`, `cookies`; `host_permissions:
+- Permissions: `storage`, `bookmarks`; `host_permissions:
   https://*/*` (direct favicon/title fetches + any https source),
   `https://*.clerk.accounts.dev/*` (the Clerk frontend API: `/v1/me`,
   session revocation), `https://*.accounts.dev/*` (Clerk hosted pages),
@@ -106,14 +106,17 @@ Static shell only. Notable pieces:
   so first paint never blocks on `fonts.googleapis.com`.
 - `#grid` (shortcut tiles) starts `mouse-nav` so the focus ring stays hidden
   until first keyboard nav.
+- Floating launchers: `#settingsBtn` (gear, top-left) and `#bkToggle`
+  (bookmarks, top-right) — the mouse path to both panels. `s`/`b` hotkeys
+  still work; the FABs are the visible affordance for pointer users.
 - Command `#bar` (summoned with `/` or `:`); placeholder hints it also accepts
   pasted images for Google reverse image search.
 - `#bk` bookmarks aside, `#drawer` settings aside, `#modal` add/edit form.
 - Settings drawer's sync group has the account row (`#acctEmail` +
-  `#acctSignIn`/`#acctSignOut`) above the sync pill.
+  `#acctSignIn`/`#acctSignOut`) above the sync pill; sign-in opens the
+  in-extension auth overlay (`#authOverlay`).
 - Script order matters (listed in §1): config → **auth** → sync → walls →
   bookmarks → app.
-- Arabic signature `<p class="page-sig">فیروز خان چوہان` floats bottom-right.
 
 ### 3.3 `css/main.css`
 Theme tokens in `:root` (`--page`, `--card`, `--surface`, `--fg`, `--line`,

@@ -281,7 +281,6 @@
             <button type="button" class="btn-secondary" id="acctSignOut" hidden>sign out</button>
           </div>
         </div>
-        <div id="acctSignInForm" class="acct-signin-form" hidden></div>
       </div>
 
       <div class="set-row sync-row">
@@ -353,11 +352,11 @@
 </div>
 
 <!-- auth overlay (sign-in / sign-up modal) -->
-<div class="auth-overlay" id="authOverlay" hidden>
+<div class="auth-overlay" id="authOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle" hidden>
   <div class="auth-modal">
     <button type="button" class="auth-close" id="authClose" aria-label="close">×</button>
     <div class="auth-head">
-      <h2 class="auth-title">Glisters</h2>
+      <h2 class="auth-title" id="authTitle">Glisters</h2>
       <p class="auth-sub">Sync your tiles, walls &amp; bookmarks across devices</p>
     </div>
 

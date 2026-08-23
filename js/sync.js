@@ -58,5 +58,15 @@
     return req('GET');
   }
 
+  /* window.SYNC — the cloud client consumed by app.js.
+     - cfg.enabled: worker URL configured (config.js)
+     - push(doc, seed?): PUT /save. seed=true adds X-Glisters-Seed: 1 so the
+       worker refuses to overwrite an existing save. Resolves true, or
+       { conflict: true } (newer save exists — pull + adopt), or
+       { unauthorized: true } (worker 401 — session rejected), or rejects
+     - pull(): GET /save → doc JSON | null (404) | { conflict/unauthorized }
+     - getToken(): Promise<string|null> — the current session JWT (delegates
+       to window.AUTH), used by tests and callers outside sync itself
+  --------------------------------------------------------------------------- */
   window.SYNC = { cfg: cfg, push: push, pull: pull, getToken: getToken };
 })();
