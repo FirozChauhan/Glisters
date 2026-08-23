@@ -344,7 +344,7 @@
       var frame = document.createElement('iframe');
       frame.src = chrome.runtime.getURL('captcha.html') + '?sitekey=' + encodeURIComponent(turnstileSiteKey);
       frame.style.cssText = 'width:300px;height:65px;border:0;display:block;margin:0 auto;background:transparent;';
-      frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
+      frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals allow-same-origin');
       frame.setAttribute('title', 'captcha');
       captchaEl.innerHTML = '';
       captchaEl.appendChild(frame);
@@ -389,7 +389,7 @@
     return Promise.resolve();
   }
 
-  /* wait (up to 30s) for a captcha token, resetting the widget once if the
+  /* wait (up to ~40s) for a captcha token, resetting the widget once if the
      first wait times out (a stale widget can silently produce no token) */
   function getCaptchaToken() {
     if (captchaToken) return Promise.resolve(captchaToken);
@@ -400,7 +400,7 @@
         var iv = setInterval(function () {
           waited += 200;
           if (captchaToken) { clearInterval(iv); resolve(captchaToken); }
-          else if (waited >= 30000) { clearInterval(iv); reject(new Error('CAPTCHA timeout')); }
+          else if (waited >= 20000) { clearInterval(iv); reject(new Error('CAPTCHA timeout')); }
         }, 200);
       });
     }
@@ -415,16 +415,17 @@
             clearInterval(interval);
             captchaBusy = false;
             resolve(captchaToken);
-          } else if (waited >= 30000) {
+          } else if (waited >= 20000) {
             clearInterval(interval);
             attempts++;
             if (attempts < 2) {
               /* stale widget — reset and try once more */
+              console.warn('[auth] captcha token timeout — resetting widget');
               refreshCaptcha();
               doWait().then(resolve, reject);
             } else {
               captchaBusy = false;
-              reject(new Error('CAPTCHA timeout'));
+              reject(new Error('Captcha timed out — check the console and that the widget rendered.'));
             }
           }
         }, 200);
@@ -512,6 +513,7 @@
   /* ===== sign-up ===== */
 
   function doSignUp(email, password) {
+    showNote('Verifying captcha…');
     return getCaptchaToken().then(function (captcha) {
       return apiFetch('/v1/client/sign_ups', {
         method: 'POST',
@@ -796,6 +798,12 @@
       captchaFrameReady = true;
     } else if (d.type === 'expired' || d.type === 'error') {
       captchaToken = null;
+      if (d.type === 'error' && d.payload) {
+        console.warn('[auth] captcha iframe error:', d.payload);
+        if (!captchaToken && signUpForm && !signUpForm.hidden) {
+          showError('Captcha failed to load: ' + d.payload);
+        }
+      }
     }
   });
 

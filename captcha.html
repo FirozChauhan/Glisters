@@ -27,9 +27,15 @@
           sitekey: sitekey,
           callback: function (token) { notify('token', token); },
           'expired-callback': function () { notify('expired'); },
-          'error-callback': function () { notify('error', 'widget error'); }
+          'error-callback': function (code) { notify('error', 'widget error: ' + (code || '')); }
         });
-      } catch (e) { notify('error', String(e && e.message || e)); }
+        console.log('[captcha] widget rendered, sitekey', sitekey);
+      } catch (e) {
+        console.error('[captcha] render failed', e);
+        notify('error', String(e && e.message || e));
+        var c = document.getElementById('container');
+        if (c) { c.textContent = 'captcha failed to load'; c.style.color = '#f00'; c.style.font = '12px monospace'; }
+      }
     }
 
     /* listen for reset requests from the parent */
