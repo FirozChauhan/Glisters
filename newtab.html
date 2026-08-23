@@ -230,7 +230,10 @@
       </div>
       <div class="set-row wall-filter">
         <label class="set-name" for="wallKey">API key</label>
-        <input type="password" id="wallKey" class="wall-add-input" placeholder="optional — unlocks NSFW" autocomplete="off" spellcheck="false" aria-label="wallhaven API key (optional, unlocks NSFW)">
+        <div class="wall-key-wrap">
+          <input type="password" id="wallKey" class="wall-add-input" placeholder="optional — unlocks NSFW" autocomplete="off" spellcheck="false" aria-label="wallhaven API key (optional, unlocks NSFW)">
+          <span class="wall-key-hint">get one at <a href="https://wallhaven.cc/settings/account" target="_blank" rel="noopener noreferrer">wallhaven.cc/settings/account</a></span>
+        </div>
       </div>
       <div class="set-row wall-grid" id="wallGrid"></div>
       <div class="set-row fav-tools">

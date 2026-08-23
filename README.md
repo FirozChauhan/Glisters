@@ -121,9 +121,9 @@ wrangler deploy
 ```
 
 Zero-config: yes. `js/config.js` ships the public-scope values (worker URL,
-wallhaven key, Clerk publishable key) so anyone can load the extension and
-sign in immediately. The one real secret — the Clerk secret key — lives only
-in `wrangler secret` on the worker side, never in the repo. Without it, the
+Clerk publishable key) so anyone can load the extension and sign in
+immediately. The one real secret — the Clerk secret key — lives only in
+`wrangler secret` on the worker side, never in the repo. Without it, the
 grid still renders from baked defaults plus `links.txt`; cloud sync (sign-in
 gated) and the NSFW wallpaper option simply stay off.
 
@@ -133,7 +133,7 @@ gated) and the NSFW wallpaper option simply stay off.
 |---|---|---|
 | `R2_WORKER_URL` | ✅ | Enables cloud sync and the `/meta` fallback; unset → sync pill reads "cloud off", grid works locally |
 | `CLERK_PUBLISHABLE_KEY` | — | Enables the account row and sign-in; unset → sync reads "not configured", grid works locally |
-| `WALLHAVEN_API_KEY` | — | Seeds the drawer key field and unlocks the NSFW purity option; unset → NSFW button disabled (`js/walls.js:948`) |
+| `WALLHAVEN_API_KEY` | — | Seeds the drawer key field and unlocks the NSFW purity option; unset → NSFW button disabled (`js/walls.js:948`). **Never shipped**: users add their own key in the drawer (`wallhaven.cc/settings/account`) |
 
 ## Project Structure
 

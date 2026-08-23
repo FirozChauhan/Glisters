@@ -776,6 +776,26 @@ input[type="range"]:focus-visible { outline: 1px solid var(--line); outline-offs
   outline: none;
 }
 .wall-add-input:focus { border-color: var(--line); }
+.wall-key-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.wall-key-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wall-key-hint a {
+  color: var(--fg-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.wall-key-hint a:hover { color: var(--fg); }
 .wall-status {
   font-style: normal;
   font-family: var(--font-mono);

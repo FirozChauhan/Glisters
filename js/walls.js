@@ -67,9 +67,10 @@
   }
 
   /* a key baked into config.js (from .env via scripts/gen-config.mjs) seeds
-     the drawer's API key field so the NSFW button is unlocked out of the box.
-     The key is still editable in the drawer and saves like any other setting;
-     a manually-entered key always wins over this built-in one. */
+     the drawer's API key field. It ships EMPTY by default — every user must
+     supply their own key from wallhaven.cc/settings/account, so NSFW only
+     works with a user-supplied key. A manually-entered key always wins over
+     this built-in one. */
   var CFG_KEY = (window.CONFIG && typeof window.CONFIG.wallhavenKey === 'string')
     ? cleanKey(window.CONFIG.wallhavenKey) : '';
 

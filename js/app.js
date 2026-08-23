@@ -72,7 +72,7 @@
     version: SEED_VERSION,
     updatedAt: 0,
     sites: DEFAULT_SITES.slice(),
-    settings: { iconSize: 68, colGap: 28, rowGap: 28, cols: 8, rows: 3, labels: true, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 500, drWidth: 500, mono: false, wallMono: false, blur: 0 }
+    settings: { iconSize: 68, colGap: 28, rowGap: 28, cols: 8, rows: 3, labels: false, labelOp: 100, labelColor: '#f5f5f5', bkWidth: 500, drWidth: 500, mono: false, wallMono: false, blur: 0 }
   };
 
   var saved = readLocal();
@@ -236,7 +236,7 @@
         var v = o.settings[k];
         s[k] = typeof v === 'number' && isFinite(v) ? v : d[k];
       });
-      s.labels = o.settings.labels !== false;
+      s.labels = o.settings.labels === true;
       s.labelColor = typeof o.settings.labelColor === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(o.settings.labelColor)
         ? o.settings.labelColor : d.labelColor;
       s.mono = o.settings.mono === true;
