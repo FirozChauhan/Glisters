@@ -26,7 +26,10 @@ A new-tab page is dead time and a sync layer is usually a silent data-loss trap.
 - **Butter-smooth drag-reorder** — drag a tile and the others FLIP out of the way live, with edge auto-flip across pages; dropping lands the tile exactly where you left it (`js/app.js:1133`).
 - **Live bookmarks sidebar** — a direct editor for Chrome's real bookmarks, written straight through `chrome.bookmarks`; changes from any device appear instantly (`js/bookmarks.js:669`).
 - **Daily wallpaper pool** — 10 wide Wallhaven toplist shots (≥1.5:1) cycled with `w`, favourites capped at 60, and a safe default that survives pool swaps (`js/walls.js:43`).
-- **Cloud sync with a parachute** — the whole save mirrors to R2; every accepted write keeps the previous two saves recoverable via `/backup` (`worker/src/index.js:208`).
+- **Cloud sync with a parachute** — the whole save mirrors to R2 **per user**
+  (Clerk sign-in; every device signed in as you syncs the same save). Every
+  accepted write keeps the previous two saves recoverable via `/backup`
+  (`worker/src/index.js:208`).
 - **Auto-detected metadata** — add a URL and the name plus icon picker fill themselves, fetched direct or via the worker's `/meta`, capped at 4 MB and an 8 s abort (`js/app.js:1506`).
 - **Command bar** — `/` or `:` matches by name, then URL, then Google; pasting an image reverse-searches it (`js/app.js:1605`).
 
@@ -67,11 +70,19 @@ Changing a setting stamps `updatedAt` and `persistLocal()` dual-writes, then `sc
 
 ### 3. The Cloud Boundary Is Hostile (security)
 
-**Problem:** The worker accepts unauthenticated PUTs, so the save file is editable by anyone who knows the URL.
+**Problem:** A hostile/buggy client must never clobber the save, execute code
+in the extension, or read another user's data.
 
-**Solution:** `normalize()` clamps name ≤300 and url ≤4096, accepts only http(s) icons, and `normUrl()` refuses to navigate `javascript:`/`data:`/`file:` schemes.
+**Solution:** Every `/save` and `/backup` request carries a Clerk-session JWT
+verified by the worker (`@clerk/backend`, `CLERK_SECRET_KEY` as a wrangler
+secret) — missing/forged/expired tokens get 401, and each user's save lives at
+its own R2 key. `normalize()` clamps name ≤300 and url ≤4096, accepts only
+http(s) icons, and `normUrl()` refuses to navigate
+`javascript:`/`data:`/`file:` schemes.
 
-**Outcome:** A tampered save cannot execute code in the extension or inject styles. `js/app.js:226`
+**Outcome:** A tampered save cannot execute code in the extension or inject
+styles; unauthenticated requests cannot read or write anything.
+`js/app.js:226`
 
 ### 4. SSRF-Proof Metadata Proxy (security)
 
@@ -91,7 +102,7 @@ Changing a setting stamps `updatedAt` and `persistLocal()` dual-writes, then `sc
 
 ## Run Locally
 
-Node ≥18 is required for the scripts and the worker; the extension itself is plain script tags — no bundler, no `npm install`, no build step.
+Node ≥18 is required for the scripts and the worker; the extension itself is plain script tags — the only npm dependency (the Clerk SDK) is bundled into the local `js/auth.js` by `gen-auth.mjs`, so no remote code ever runs.
 
 ```bash
 # extension — zero-config: loads with no .env; sync just reports "cloud off"
@@ -100,32 +111,38 @@ chrome://extensions → Developer mode → Load unpacked → this folder
 # optional build helpers
 node scripts/gen-icons.mjs    # regenerate icons/ PNGs (zero deps)
 node scripts/gen-config.mjs   # regenerate js/config.js from .env
+node scripts/gen-auth.mjs     # bundle js-src/auth.js + Clerk SDK → js/auth.js
 
 # cloud worker — production deploy (binding: R2 bucket "jigar")
-cd worker && wrangler deploy
+cd worker
+wrangler secret put CLERK_SECRET_KEY   # Clerk secret key — never in .env
+wrangler deploy
 ```
 
-Zero-config: yes. Without `.env`, the grid still renders from baked defaults plus `links.txt`; cloud sync and the NSFW wallpaper option simply stay off.
+Zero-config: yes. Without `.env`, the grid still renders from baked defaults plus `links.txt`; cloud sync (sign-in gated) and the NSFW wallpaper option simply stay off.
 
 ## Configuration
 
 | Env var | Required | Effects when set |
 |---|---|---|
 | `R2_WORKER_URL` | ✅ | Enables cloud sync and the `/meta` fallback; unset → sync pill reads "cloud off", grid works locally |
+| `CLERK_PUBLISHABLE_KEY` | — | Enables the account row and sign-in; unset → sync reads "not configured", grid works locally |
 | `WALLHAVEN_API_KEY` | — | Seeds the drawer key field and unlocks the NSFW purity option; unset → NSFW button disabled (`js/walls.js:948`) |
 
 ## Project Structure
 
 ```
 manifest.json             MV3 manifest; new-tab override, pinned key, CSP
-newtab.html               Static shell; loads the five JS modules in order
+newtab.html               Static shell; loads the six JS modules in order
+js-src/auth.js            Clerk bootstrap source (bundled → js/auth.js, gitignored)
 js/app.js                 Core: grid, vim keys, drag-reorder, modal, sync orchestration
 js/bookmarks.js           Bookmarks sidebar — direct chrome.bookmarks editor
 js/walls.js               Wallhaven pool, favourites, safe wallpaper, blob cache
-js/sync.js                Thin worker client (GET/PUT /save)
-js/config.js              Generated runtime config (worker URL, wallhaven key)
-worker/src/index.js       Worker: LWW + seed guard, prev-save rotation, /meta, /backup
+js/sync.js                Thin worker client (GET/PUT /save, Bearer JWT)
+js/config.js              Generated runtime config (worker URL, wallhaven key, publishable key)
+worker/src/index.js       Worker: JWT auth, per-user LWW + seed guard, prev rotation, /backup, /meta
 scripts/gen-config.mjs    Regenerates js/config.js from .env
+scripts/gen-auth.mjs      Bundles js-src/auth.js → js/auth.js (esbuild)
 links.txt                 Optional first-run seed, one URL per line
 ```
 

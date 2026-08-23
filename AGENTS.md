@@ -37,13 +37,16 @@ Key characteristics:
 manifest.json  →  newtab.html  (Chrome newtab override)
                       │  loads in order:
                       ├─ js/config.js     (runtime constants; generated)
-                      ├─ js/sync.js       (window.SYNC — cloud push/pull)
+                      ├─ js/auth.js       (window.AUTH — Clerk session; BUNDLED,
+                      │                     generated from js-src/auth.js)
+                      ├─ js/sync.js       (window.SYNC — cloud push/pull, JWT)
                       ├─ js/walls.js      (window.WALLS — wallpapers)
                       ├─ js/bookmarks.js  (window.BOOKMARKS — sidebar)
                       └─ js/app.js        (window.CONFIG consumer — grid/core)
 css/main.css, css/bookmarks.css   (theme: tokens in :root)
 icons/  (generated 16/48/128 PNGs)
-scripts/gen-config.mjs / gen-icons.mjs  (Node build helpers)
+scripts/gen-config.mjs / gen-auth.mjs / gen-icons.mjs  (Node build helpers)
+js-src/auth.js  (Clerk bootstrap SOURCE — esbuild-bundled to js/auth.js)
 worker/  (Cloudflare Worker → R2 bucket "SAVE")
 links.txt  (optional first-run seed, one URL per line)
 ```
@@ -71,8 +74,11 @@ unrelated to the app).
 
 ### 3.1 `manifest.json`
 - MV3; `chrome_url_overrides.newtab → newtab.html`.
-- Permissions: `storage`, `bookmarks`; `host_permissions: https://*/*` (needed
-  for direct favicon/title fetches and any https source).
+- Permissions: `storage`, `bookmarks`, `cookies`; `host_permissions:
+  https://*/*` (direct favicon/title fetches + any https source) and
+  `https://*.clerk.accounts.dev/*` (the Clerk OAuth popup / session domain;
+  redundant with `https://*/*` today but explicit for when the wildcard is
+  narrowed).
 - CSP for extension pages: no inline scripts, `connect-src 'self' https:`.
 - A pinned `key` (line 6) keeps the extension id stable — churning ids orphan
   all `chrome.storage` data (the settings drawer's Storage chips exist to
@@ -87,8 +93,10 @@ Static shell only. Notable pieces:
 - Command `#bar` (summoned with `/` or `:`); placeholder hints it also accepts
   pasted images for Google reverse image search.
 - `#bk` bookmarks aside, `#drawer` settings aside, `#modal` add/edit form.
-- Script order matters (listed in §1): config → sync → walls → bookmarks →
-  app.
+- Settings drawer's sync group has the account row (`#acctEmail` +
+  `#acctSignIn`/`#acctSignOut`) above the sync pill.
+- Script order matters (listed in §1): config → **auth** → sync → walls →
+  bookmarks → app.
 - Arabic signature `<p class="page-sig">فیروز خان چوہان` floats bottom-right.
 
 ### 3.3 `css/main.css`
@@ -334,26 +342,43 @@ Favicon resolution duplicates app.js's official-icon map + candidates + the
 shared `'glisters-icons'` persisted cache (self-contained by design).
 
 ### 3.9 `js/config.js` (generated) / `js/config.example.js`
-`window.CONFIG = { worker, wallhavenKey?, generatedAt }`. `config.example.js`
-is a stub. Never hand-edit `config.js`.
+`window.CONFIG = { worker, wallhavenKey?, publishableKey?, generatedAt }`.
+`config.example.js` is a stub. Never hand-edit `config.js`.
 
-### 3.10 `worker/src/index.js` (~220 lines) — Cloudflare Worker
-- R2 binding `env.SAVE` holds the key `'Glisters/save.json'`.
-- Routes: `OPTIONS` preflight (CORS `*`); `GET/PUT /save`;
-  `GET /backup` (the kept previous save(s): `{previous, previous2}`,
-  `404` until something has been overwritten); `GET /meta?url=`
-  (server-side title/icon scraping, CORS-free).
+`js/auth.js` is also generated — from `js-src/auth.js` via
+`node scripts/gen-auth.mjs` (esbuild bundles the Clerk SDK in; the extension
+ships plain script tags with a strict CSP, so the only npm dep is compiled
+into a local file). It is gitignored like `config.js`. Never hand-edit it.
+
+### 3.10 `worker/src/index.js` (~270 lines) — Cloudflare Worker
+- **Auth**: every `/save` and `/backup` request must carry
+  `Authorization: Bearer <clerk-session-jwt>`; `@clerk/backend` verifies it
+  against `env.CLERK_SECRET_KEY` (set via `wrangler secret put
+  CLERK_SECRET_KEY` / `worker/.dev.vars` locally). Missing/forged/expired
+  tokens → `401` — the worker is locked down even before the secret is set.
+  `/meta` stays public (no user data involved).
+- **Per-user keys**: R2 objects are namespaced `Glisters/users/<userId>/…`
+  (`save.json`, `save.prev1.json`, `save.prev2.json`) — every user gets their
+  own save, backups, and seed guard.
+- Routes: `OPTIONS` preflight (CORS `*`, allows `Content-Type`,
+  `X-Glisters-Seed`, `Authorization`); `GET/PUT /save`; `GET /backup`;
+  `GET /meta?url=` (server-side title/icon scraping, CORS-free).
 - **Last-write-wins**: PUT parses incoming `updatedAt`, compares with the
   stored doc; if stored is newer → `409` so the client pulls and adopts.
 - **Never lose the previous save**: before every accepted overwrite the
-  outgoing doc is rotated to `Glisters/save.prev1.json` (then
-  `save.prev2.json`) — a clobber (seed, bug, stale client, malicious PUT)
-  is one `PUT /save` away from being undone via `GET /backup`. Backup is
-  best-effort and never blocks the write.
+  outgoing doc is rotated to `save.prev1.json` (then `save.prev2.json`) — a
+  clobber (seed, bug, stale client, malicious PUT) is one `PUT /save` away
+  from being undone via `GET /backup`. Backup is best-effort and never blocks
+  the write.
 - **Seed guard**: a PUT flagged `X-Glisters-Seed: 1` (the client's fresh
   install seeding from `links.txt`, before any real edits) is rejected with
-  `409` when a save already exists, so a wiped local store can never
-  overwrite real cloud data — the client pulls and adopts instead.
+  `409` when a save already exists — and for a brand-new user when the legacy
+  save is still unclaimed — so a wiped local store can never overwrite real
+  cloud data; the client pulls and adopts instead.
+- **Legacy migration**: the pre-multi-user save at `Glisters/save.json` is
+  claimed by the **first** signed-in user: copied into their key, then moved
+  aside (deleted + `Glisters/legacy-claimed.json` marker). Later sign-ins
+  start fresh. Covered by smoke tests (`worker/test/run.mjs`).
 - **SSRF guard** (`isPrivateHost`) on `/meta`: only public http(s), ports
   80/443; rejects localhost/`.local`/`.internal`/metadata, all private IPv4
   ranges (0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24,
@@ -452,9 +477,11 @@ stored one (409). The client then pulls and adopts the newer doc. This is the
   - `glisters-walls` (wallpaper doc), `glisters-bk-ui` (sidebar panel open
     state only — the sidebar itself stores nothing; it edits Chrome's
     bookmarks directly).
-4. Cloud (R2 via Worker) — mirror + multi-device; only `Glisters/save.json`,
-   plus the automatic previous-save copies `save.prev1/prev2.json` kept by
-   the worker before every overwrite (recoverable via `GET /backup`).
+4. Cloud (R2 via Worker) — mirror + per-user multi-device; each save lives at
+  `Glisters/users/<userId>/save.json`, plus the automatic previous-save
+  copies `save.prev1/prev2.json` kept by the worker before every overwrite
+  (recoverable via `GET /backup`). The pre-multi-user legacy save at
+  `Glisters/save.json` is claimed by the first sign-in.
 Rule of thumb: **chrome.storage is authoritative for durability; localStorage
 is the fast path; cloud is a mirror that newer-wins.** Boot always reconciles
 chrome.storage into memory before doing destructive work (see bookmarks boot
@@ -469,8 +496,9 @@ only `commit()` and calls module hooks; modules never call app.js directly.**
 
 | Hook | Owner | Signature | Used by |
 |---|---|---|---|
-| `window.CONFIG` | config.js | `{ worker, wallhavenKey, generatedAt }` | app/sync/walls |
-| `window.SYNC` | sync.js | `{ cfg, push(doc)→Promise, pull()→Promise }` | app.js |
+| `window.CONFIG` | config.js | `{ worker, wallhavenKey, publishableKey, generatedAt }` | app/sync/walls |
+| `window.AUTH` | auth.js | `{ ready, enabled, isSignedIn, user, getToken(), signIn(), signOut(), onChange(fn) }` | app/sync |
+| `window.SYNC` | sync.js | `{ cfg, push(doc, seed?)→Promise, pull()→Promise }` | app.js |
 | `window.BOOKMARKS` | bookmarks.js | `{ bind(cb), forDoc(), restore(obj), refreshFromChrome() }` | app.js |
 | `window.WALLS` | walls.js | `{ bind(cb), forDoc(), restore(obj), next, refresh, reload, filter, key, fav, favPool, setSafe, applySafe, download }` | app.js |
 
@@ -490,18 +518,28 @@ grid.
 2. `renderAll()` on current (possibly seeded) state.
 3. If `needSeed`: try `chrome.storage.local` restore → else `links.txt` → else
    empty. Marks `seededFromLinks`.
-4. `syncStart()`: reconcile cloud (see §4/§5 rules).
-5. `BOOKMARKS.bind(commit)` + `restore(state.bookmarks)` (both inert — the
+4. `AUTH.onChange` is subscribed up-front: it fires immediately (current state)
+   and on every sign-in/sign-out/session-restore — the single entry that
+   (re)runs `syncStart()` per user.
+5. `syncStart()`: reconcile cloud (see §4/§5 rules) — only when signed in;
+   otherwise the pill reads "sign in to sync" and the grid stays fully local.
+6. `BOOKMARKS.bind(commit)` + `restore(state.bookmarks)` (both inert — the
    sidebar edits Chrome directly now); `WALLS.bind` + `restore` do real work.
 Note the page never steals focus (address bar keeps it) — keys only live after
 the user clicks/tabs in.
 
 ### Cloud sync decision (app.js)
-- Local edits → `commit()` → `scheduleCloud()` → push in 1.3s. The first
-  real edit clears `seededFromLinks` so later pushes are never flagged as
-  seeds.
+- **Signed out**: the grid is fully local — edits persist to
+  localStorage/chrome.storage and bump `updatedAt` + `dirty`, but nothing
+  touches the cloud. The pill reads "sign in to sync"; the sync button opens
+  the Clerk sign-in popup instead of pushing.
+- **Signed in**: local edits → `commit()` → `scheduleCloud()` → push in 1.3s.
+  The first real edit clears `seededFromLinks` so later pushes are never
+  flagged as seeds. Edits made while signed out sync up on sign-in (their
+  `updatedAt` is newer, so the normal LWW path pushes them).
 - Push failure → dirty, retry 20s + on `online`/focus/unload.
-- Push 409 → pull newer, `adoptRemote`.
+- Push 409 → pull newer, `adoptRemote`. Push 401 (dead/expired session) →
+  dirty stays, pill reads "sign in to sync", no retry loop.
 - Boot pull → newer remote (and not locally dirty) wins via `adoptRemote`;
   otherwise push local. A fresh install / wiped store adopts ANY valid
   cloud doc (even an empty one — the user may have cleared it deliberately)
@@ -570,10 +608,14 @@ so the async merge window can't resurrect them).
   `background-image`; bookmarks `setData` cleans each node.
 - **Worker SSRF guard** on `/meta` with per-hop redirect re-validation and 4MB
   caps.
-- **Worker PUT is unauthenticated by design** — treat R2 as public scratch
-  storage; never store private data there.
-- **PK (known limitation)**: anyone with the worker URL can overwrite the save;
-  conflict/409 logic limits only accidental clobbering, not malice.
+- **Worker JWT auth**: every `/save` and `/backup` request must carry a
+  Clerk-session JWT; the worker verifies it with `@clerk/backend` and
+  `env.CLERK_SECRET_KEY`. Missing/forged/expired tokens → `401`. The worker
+  is locked down even before the secret is set (verification fails → `401`).
+  `/meta` stays public (no user data).
+- **Per-user namespacing**: each user's save lives at its own R2 key, so a
+  compromised token is limited to one user's data. Old single-save legacy
+  (`Glisters/save.json`) is claimed by the first sign-in, then moved aside.
 
 ---
 
@@ -612,9 +654,10 @@ so the async merge window can't resurrect them).
    cloud on boot; the worker refuses seed-flagged PUTs over an existing doc.
 9. Bump `SEED_VERSION` (app.js) deliberately and document why; bump walls doc
    `v` only with a migration path.
-9. Run `node scripts/gen-icons.mjs` (initial) and `node scripts/gen-config.mjs`
-   (after `.env` changes). No lint/typecheck/build pipeline exists — the app is
-   plain script tags; validate by loading the extension.
+10. Run `node scripts/gen-icons.mjs` (initial), `node scripts/gen-config.mjs`
+    (after `.env` changes), and `node scripts/gen-auth.mjs` (after
+    `js-src/auth.js` changes). No lint/typecheck/build pipeline exists — the
+    app is plain script tags; validate by loading the extension.
 
 ---
 
@@ -626,11 +669,18 @@ Frontend:
 3. Reload the extension after config changes.
 
 Cloud:
-1. `cd worker && wrangler deploy` (requires the R2 bucket + `SAVE`
-   binding declared in `wrangler.toml`).
-2. Put the returned URL in `R2_WORKER_URL` inside `.env`.
-3. Re-run `gen-config.mjs`, reload the extension; settings → sync pill should
-   read `synced`.
+1. `cd worker && wrangler secret put CLERK_SECRET_KEY` (the Clerk secret key
+   — never in .env; local dev uses `worker/.dev.vars`).
+2. `cd worker && wrangler deploy` (requires the R2 bucket + `SAVE` binding
+   declared in `wrangler.toml`).
+3. Put the returned URL in `R2_WORKER_URL` inside `.env`, plus
+   `CLERK_PUBLISHABLE_KEY` (the Clerk app's publishable key — public by
+   design).
+4. Re-run `node scripts/gen-config.mjs`, reload the extension; settings →
+   account row: sign in; sync pill should read `synced`.
+5. Clerk Dashboard → your app → allowed origins must include
+   `chrome-extension://<your-extension-id>` (the pinned manifest key keeps
+   this id stable).
 
 ---
 
