@@ -7,6 +7,7 @@
     "gen-auth": "node scripts/gen-auth.mjs",
     "gen-icons": "node scripts/gen-icons.mjs",
     "build": "npm run gen-config && npm run gen-auth && npm run gen-icons",
+    "build:all": "npm run build && npm run build:firefox",
     "build:firefox": "node scripts/build-firefox.mjs",
     "lint:firefox": "npx --yes web-ext lint --source-dir dist/firefox"
   },
