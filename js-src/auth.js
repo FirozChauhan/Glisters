@@ -377,6 +377,18 @@
 
   /* ===== fetch Turnstile sitekey + captcha requirement from environment ===== */
 
+  /* captcha.html ships only in the Chrome build (it needs the MV3 sandbox
+     page mechanism, which Firefox does not support). Before enabling the
+     captcha, confirm the page actually exists in this build so the Firefox
+     package never embeds a dead iframe. */
+  function captchaPageAvailable() {
+    try {
+      return fetch(chrome.runtime.getURL('captcha.html'), { method: 'HEAD' })
+        .then(function (r) { return r.ok; })
+        .catch(function () { return false; });
+    } catch (e) { return Promise.resolve(false); }
+  }
+
   function fetchSiteKey() {
     return fetch(API + '/v1/environment').then(function (r) { return r.json(); })
       .then(function (d) {
@@ -385,7 +397,11 @@
       /* captcha is disabled when the public key is null (dashboard → security) */
         if (dc.captcha_public_key) {
           turnstileSiteKey = dc.captcha_public_key;
-          captchaRequired = true;
+          /* the Firefox build has no captcha.html — skip the widget entirely */
+          return captchaPageAvailable().then(function (ok) {
+            captchaRequired = !!ok;
+            if (!ok) console.warn('[auth] captcha page not shipped in this build — captcha disabled');
+          });
         } else {
           captchaRequired = false;
         }

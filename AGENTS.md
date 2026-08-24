@@ -35,6 +35,7 @@ Key characteristics:
 
 ```
 manifest.json  →  newtab.html  (Chrome newtab override)
+                  popup.html   (Firefox toolbar popup — iframes newtab.html)
                       │  loads in order:
                       ├─ js/config.js     (runtime constants; generated)
                       ├─ js/auth.js       (window.AUTH — Clerk session via
@@ -49,9 +50,12 @@ manifest.json  →  newtab.html  (Chrome newtab override)
                       └─ js/app.js        (window.CONFIG consumer — grid/core)
 css/main.css, css/bookmarks.css   (theme: tokens in :root)
 captcha.html  (sandbox page — Turnstile captcha; loaded by auth.js)
+              (only in Chrome; excluded from the Firefox build)
 icons/  (generated 16/48/128 PNGs)
-scripts/gen-config.mjs / gen-auth.mjs / gen-icons.mjs  (Node build helpers)
+scripts/gen-config.mjs / gen-auth.mjs / gen-icons.mjs / build-firefox.mjs  (Node build helpers)
 js-src/auth.js  (auth SOURCE — raw Clerk REST API, no SDK; copied to js/auth.js)
+manifest.firefox.json  (Firefox manifest — popup entry, gecko id, data consent)
+popup.js / css/popup.css  (Firefox popup shell — iframe, open-in-tab, sizing)
 worker/  (Cloudflare Worker → R2 bucket "SAVE")
 default-save.json  (popular-websites seed template, one full save doc)
 links.txt  (legacy first-run seed override, one URL per line)
@@ -790,6 +794,26 @@ Cloud:
 5. Clerk Dashboard → your app → allowed origins must include
    `chrome-extension://<your-extension-id>` (the pinned manifest key keeps
    this id stable).
+
+Firefox:
+1. `node scripts/build-firefox.mjs` — assembles `dist/firefox/` (Firefox
+   manifest + shared code) and zips `dist/glisters-firefox-<version>.zip`
+   for AMO. `npm run lint:firefox` runs `web-ext lint` (0 errors expected;
+   the 3 `UNSAFE_VAR_ASSIGNMENT` warnings are the sanctioned static-SVG
+   `innerHTML` pattern in bookmarks.js).
+2. Local test: `about:debugging#/runtime/this-firefox` → Load Temporary
+   Add-on → `dist/firefox/manifest.json`. Release Firefox cannot sideload
+   unsigned add-ons — AMO signing is mandatory.
+3. Submit the zip at addons.mozilla.org (requires `gecko.id`
+   `glisters@firozchauhan.dev` and `data_collection_permissions`, both in
+   `manifest.firefox.json`). `strict_min_version` is 140.0 (142.0 Android)
+   because `data_collection_permissions` landed in those versions.
+4. Clerk Dashboard → allowed origins must also include
+   `moz-extension://<firefox-addon-id>` — the Firefox extension origin
+   differs from Chrome's; add it or sync sign-in will 401.
+5. `captcha.html` is excluded from the Firefox zip (Firefox has no sandbox
+   pages). `auth.js` probes for the page and disables Turnstile when it is
+   absent — keep that guard if the Chrome sandbox setup ever changes.
 
 ---
 

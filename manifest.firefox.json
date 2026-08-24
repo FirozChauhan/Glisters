@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "Glisters — New Tab",
+  "description": "Minimal keyboard-first new tab with a shortcut grid, per-user sync via Clerk + Cloudflare.",
+  "version": "1.0.0",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "glisters@firozchauhan.dev",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "authenticationInfo",
+          "bookmarksInfo",
+          "personallyIdentifyingInfo"
+        ]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  },
+  "action": {
+    "default_title": "Glisters",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Space"
+      },
+      "description": "Open Glisters"
+    }
+  },
+  "permissions": [
+    "storage",
+    "bookmarks"
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "https://*.clerk.accounts.dev/*",
+    "https://*.accounts.dev/*",
+    "https://challenges.cloudflare.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src https: data: blob:; connect-src 'self' https:;"
+  }
+}

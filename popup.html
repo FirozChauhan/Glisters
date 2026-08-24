@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glisters</title>
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<!-- popup shell: everything lives in newtab.html — we mount it in an iframe
+     (same-origin extension page) so Chrome and Firefox share ONE grid page.
+     Firefox has no chrome_url_overrides, so this popup is the Firefox
+     entry point; the button below opens the full page in a tab. -->
+<link rel="stylesheet" href="css/popup.css">
+</head>
+<body>
+<iframe id="glistersFrame" src="newtab.html" title="Glisters" tabindex="-1"></iframe>
+<button id="openTab" class="popup-open-tab" type="button" title="open full page in a new tab">open in tab</button>
+<script src="popup.js"></script>
+</body>
+</html>
